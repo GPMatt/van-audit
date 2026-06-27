@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>GPM Van Audit</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#7CB518">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #F5F0E8; color: #1a1a1a; min-height: 100vh; }
+
+    header { background: #7CB518; color: white; padding: 14px 20px;
+             display: flex; justify-content: space-between; align-items: center; }
+    header h1   { font-size: 18px; font-weight: 700; }
+    header .sub { font-size: 11px; opacity: .75; letter-spacing: .5px; text-transform: uppercase; }
+    #header-right { font-size: 12px; font-weight: 600; background: rgba(0,0,0,.2);
+                    padding: 4px 10px; border-radius: 20px; white-space: nowrap; display: none; }
+
+    .screen { padding: 20px; max-width: 480px; margin: 0 auto;
+              display: none; flex-direction: column; gap: 14px; }
+    .screen.active { display: flex; }
+
+    .btn { width: 100%; padding: 15px; border: none; border-radius: 10px;
+           font-size: 16px; font-weight: 700; cursor: pointer; }
+    .btn-green          { background: #7CB518; color: white; }
+    .btn-green:disabled { background: #bbb; cursor: default; }
+    .btn-ghost          { background: #e8e2d8; color: #444; }
+
+    /* ── Van selection ── */
+    #van-screen { padding-top: 32px; }
+    #van-screen h2 { font-size: 22px; font-weight: 700; }
+    #van-screen p  { font-size: 14px; color: #666; }
+    select { width: 100%; padding: 14px; border: 2px solid #ddd; border-radius: 10px;
+             font-size: 16px; background: white; appearance: none; }
+
+    /* ── Session overview ── */
+    #overview-screen { padding-top: 24px; }
+    .set-badge { background: #7CB518; color: white; border-radius: 12px;
+                 padding: 24px 20px; text-align: center; }
+    .set-badge .set-label { font-size: 12px; opacity: .8; text-transform: uppercase; letter-spacing: 1px; }
+    .set-badge .set-name  { font-size: 22px; font-weight: 700; margin: 8px 0 4px; line-height: 1.2; }
+    .set-badge .set-count { font-size: 14px; opacity: .85; }
+    .info-box { background: white; border-radius: 10px; padding: 14px 16px;
+                font-size: 14px; color: #555; line-height: 1.7; }
+
+    /* ── Item audit ── */
+    .prog-wrap { }
+    .prog-bar  { background: #ddd; border-radius: 4px; height: 6px; }
+    .prog-fill { background: #7CB518; height: 6px; border-radius: 4px; transition: width .25s; }
+    .prog-lbl  { font-size: 12px; color: #999; text-align: right; margin-top: 4px; }
+
+    .item-card { background: white; border-radius: 12px; padding: 18px 16px;
+                 border-left: 4px solid #7CB518; }
+    .item-card h3   { font-size: 18px; font-weight: 700; line-height: 1.25; }
+    .item-card small { font-size: 12px; color: #aaa; display: block; margin-top: 3px; }
+    .exp-row { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
+    .exp-lbl { font-size: 13px; color: #777; }
+    .exp-val { font-size: 32px; font-weight: 700; }
+
+    #actual-input { width: 100%; padding: 14px; border: 2px solid #7CB518; border-radius: 10px;
+                    font-size: 32px; font-weight: 700; text-align: center; background: white; }
+
+    /* ── Scan ── */
+    #scan-area { display: none; flex-direction: column; gap: 8px; }
+    #scan-area.open { display: flex; }
+    #video-wrap { position: relative; background: #000; border-radius: 10px; overflow: hidden; }
+    #video      { width: 100%; display: block; max-height: 200px; object-fit: cover; }
+    .aim-line   { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+    .aim-line::before { content: ''; width: 65%; height: 2px;
+                        background: #7CB518; box-shadow: 0 0 8px #7CB518; }
+    #scan-hint   { text-align: center; font-size: 13px; color: #888; }
+    #scan-result { display: none; text-align: center; padding: 9px 14px; border-radius: 8px;
+                   font-weight: 600; font-size: 14px; }
+    .sr-ok  { background: #d4edda; color: #155724; }
+    .sr-bad { background: #f8d7da; color: #721c24; }
+
+    /* ── Complete ── */
+    #complete-screen { padding-top: 24px; }
+    .done-badge { background: #7CB518; color: white; border-radius: 12px;
+                  padding: 24px 20px; text-align: center; }
+    .done-badge h2 { font-size: 24px; font-weight: 700; }
+    .done-badge p  { font-size: 14px; opacity: .85; margin-top: 6px; }
+    .disc-row { display: flex; justify-content: space-between; align-items: center;
+                padding: 10px 14px; background: white; border-radius: 8px;
+                font-size: 14px; }
+    .disc-row .d-ok  { color: #2d7a06; font-weight: 700; }
+    .disc-row .d-bad { color: #a00;    font-weight: 700; }
+    .all-ok { text-align: center; color: #2d7a06; font-weight: 700; padding: 18px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="sub">Green Property Mgmt</div>
+    <h1>Van Audit</h1>
+  </div>
+  <div id="header-right"></div>
+</header>
+
+<!-- 1: Van selection -->
+<div class="screen active" id="van-screen">
+  <h2>Select Your Van</h2>
+  <p>Choose the van you are auditing today.</p>
+  <select id="van-select"><option value="">Loading...</option></select>
+  <button class="btn btn-green" id="start-btn" disabled onclick="loadSession()">
+    Load Today's Audit →
+  </button>
+</div>
+
+<!-- 2: Session overview -->
+<div class="screen" id="overview-screen">
+  <div class="set-badge">
+    <div class="set-label" id="ov-set-label"></div>
+    <div class="set-name"  id="ov-set-name"></div>
+    <div class="set-count" id="ov-item-count"></div>
+  </div>
+  <div class="info-box">
+    Items are presented one at a time.<br>
+    Enter the actual count you find in the van.<br>
+    Discrepancies are logged and emailed automatically.<br>
+    Barcode scan is available on each item to verify the bin.
+  </div>
+  <button class="btn btn-green" onclick="beginAudit()">Begin →</button>
+  <button class="btn btn-ghost" onclick="show('van-screen')">← Change Van</button>
+</div>
+
+<!-- 3: Item audit -->
+<div class="screen" id="item-screen">
+  <div class="prog-wrap">
+    <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
+    <div class="prog-lbl"  id="prog-lbl"></div>
+  </div>
+
+  <div class="item-card">
+    <h3   id="item-name"></h3>
+    <small id="item-pn"></small>
+    <div class="exp-row">
+      <span class="exp-lbl">Expected</span>
+      <span class="exp-val" id="item-exp"></span>
+    </div>
+  </div>
+
+  <button class="btn btn-ghost" id="scan-btn" onclick="toggleScan()">
+    Scan Bin (Optional)
+  </button>
+
+  <div id="scan-area">
+    <div id="video-wrap">
+      <video id="video" autoplay muted playsinline></video>
+      <div class="aim-line"></div>
+    </div>
+    <div id="scan-hint">Point camera at barcode on bin</div>
+    <div id="scan-result"></div>
+  </div>
+
+  <input type="number" id="actual-input" inputmode="numeric" min="0" placeholder="Count">
+  <button class="btn btn-green" onclick="submitItem()">Submit →</button>
+</div>
+
+<!-- 4: Session complete -->
+<div class="screen" id="complete-screen">
+  <div class="done-badge">
+    <h2>Session Complete</h2>
+    <p id="done-summary"></p>
+  </div>
+  <div id="disc-list"></div>
+  <button class="btn btn-green" onclick="endSession()">End Session</button>
+</div>
+
+<script>
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyuqBkT1VBH1P6bFIfCs8dIwEGRqWPGlk7K3enA_NVqlOVasw60ZOzULEHtDm2xwiBN/exec';
+
+let selectedVan  = '';
+let sessionItems = [];
+let currentIdx   = 0;
+let sessionLog   = [];
+let codeReader   = null;
+let scanOpen     = false;
+
+// ── Boot: load vans ──────────────────────────────────────────────────────────
+(async function () {
+  const sel = document.getElementById('van-select');
+  try {
+    const res  = await fetch(`${GAS_URL}?action=vans`);
+    const data = await res.json();
+    sel.innerHTML = '<option value="">— Select Van —</option>' +
+      data.vans.map(v => `<option value="${v}">${v}</option>`).join('');
+    sel.onchange = () => {
+      document.getElementById('start-btn').disabled = !sel.value;
+    };
+  } catch {
+    sel.innerHTML = '<option value="">Error loading — check connection</option>';
+  }
+})();
+
+// ── Load session from GAS ────────────────────────────────────────────────────
+async function loadSession() {
+  selectedVan = document.getElementById('van-select').value;
+  if (!selectedVan) return;
+
+  const btn = document.getElementById('start-btn');
+  btn.disabled    = true;
+  btn.textContent = 'Loading…';
+
+  try {
+    const res  = await fetch(`${GAS_URL}?action=getSession&van=${enc(selectedVan)}`);
+    const data = await res.json();
+
+    if (!data.items || data.items.length === 0) {
+      alert('No items found for this van in the current set. Check Live Inventory sheet.');
+      btn.disabled    = false;
+      btn.textContent = 'Load Today\'s Audit →';
+      return;
+    }
+
+    sessionItems = data.items;
+    document.getElementById('header-right').textContent = selectedVan.split(' - ')[0]; // e.g. "Van 1"
+    document.getElementById('header-right').style.display = 'block';
+    document.getElementById('ov-set-label').textContent  = `Set ${data.setNum} of ${data.setTotal}`;
+    document.getElementById('ov-set-name').textContent   = data.setName;
+    document.getElementById('ov-item-count').textContent = `${data.items.length} items`;
+    show('overview-screen');
+  } catch (e) {
+    alert('Failed to load session. Check connection and try again.');
+    btn.disabled    = false;
+    btn.textContent = 'Load Today\'s Audit →';
+  }
+}
+
+// ── Begin audit ──────────────────────────────────────────────────────────────
+function beginAudit() {
+  currentIdx = 0;
+  sessionLog = [];
+  show('item-screen');
+  renderItem();
+}
+
+function renderItem() {
+  const item = sessionItems[currentIdx];
+  const pct  = (currentIdx / sessionItems.length) * 100;
+
+  document.getElementById('prog-fill').style.width   = pct + '%';
+  document.getElementById('prog-lbl').textContent    = `Item ${currentIdx + 1} of ${sessionItems.length}`;
+  document.getElementById('item-name').textContent   = item.name;
+  document.getElementById('item-pn').textContent     = `Part #${item.partNumber}`;
+  document.getElementById('item-exp').textContent    = item.expectedQty;
+  document.getElementById('actual-input').value      = '';
+
+  closeScan();
+  const sr = document.getElementById('scan-result');
+  sr.style.display = 'none';
+  sr.className     = '';
+  sr.textContent   = '';
+  document.getElementById('scan-btn').textContent = 'Scan Bin (Optional)';
+
+  setTimeout(() => document.getElementById('actual-input').focus(), 100);
+}
+
+// ── Submit one item ──────────────────────────────────────────────────────────
+async function submitItem() {
+  const item   = sessionItems[currentIdx];
+  const actual = parseInt(document.getElementById('actual-input').value);
+  if (isNaN(actual) || actual < 0) {
+    document.getElementById('actual-input').focus();
+    return;
+  }
+
+  const delta = actual - item.expectedQty;
+  sessionLog.push({ ...item, actual, delta });
+
+  fetch(
+    `${GAS_URL}?action=submit` +
+    `&van=${enc(selectedVan)}&partNumber=${enc(item.partNumber)}` +
+    `&name=${enc(item.name)}&expectedQty=${item.expectedQty}&actualQty=${actual}`,
+    { mode: 'no-cors' }
+  );
+
+  currentIdx++;
+  if (currentIdx < sessionItems.length) {
+    renderItem();
+  } else {
+    showComplete();
+  }
+}
+
+// ── Session complete ──────────────────────────────────────────────────────────
+function showComplete() {
+  closeScan();
+  const bad = sessionLog.filter(r => r.delta !== 0);
+
+  document.getElementById('done-summary').textContent =
+    `${sessionLog.length} items · ${bad.length} discrepanc${bad.length === 1 ? 'y' : 'ies'}`;
+
+  document.getElementById('disc-list').innerHTML = bad.length === 0
+    ? '<div class="all-ok">✓ All items match</div>'
+    : bad.map(r => `
+        <div class="disc-row">
+          <span>${r.name}</span>
+          <span class="${r.delta < 0 ? 'd-bad' : 'd-ok'}">${r.delta > 0 ? '+' : ''}${r.delta}</span>
+        </div>`).join('');
+
+  show('complete-screen');
+}
+
+async function endSession() {
+  fetch(`${GAS_URL}?action=completeSession&van=${enc(selectedVan)}`, { mode: 'no-cors' });
+
+  selectedVan = '';
+  document.getElementById('header-right').style.display = 'none';
+  document.getElementById('start-btn').disabled    = true;
+  document.getElementById('start-btn').textContent = 'Load Today\'s Audit →';
+  document.getElementById('van-select').value      = '';
+  show('van-screen');
+}
+
+// ── Optional barcode scan ─────────────────────────────────────────────────────
+function toggleScan() {
+  scanOpen ? closeScan() : openScan();
+}
+
+function openScan() {
+  scanOpen = true;
+  document.getElementById('scan-area').classList.add('open');
+  document.getElementById('scan-btn').textContent  = 'Close Camera';
+  document.getElementById('scan-hint').textContent = 'Point camera at barcode on bin';
+
+  codeReader = new ZXing.BrowserMultiFormatReader();
+  codeReader.decodeFromVideoDevice(null, 'video', (result) => {
+    if (result) verifyBarcode(result.getText());
+  });
+}
+
+function closeScan() {
+  scanOpen = false;
+  if (codeReader) { try { codeReader.reset(); } catch (_) {} codeReader = null; }
+  document.getElementById('scan-area').classList.remove('open');
+  if (document.getElementById('scan-btn')) {
+    document.getElementById('scan-btn').textContent = 'Scan Bin (Optional)';
+  }
+}
+
+function verifyBarcode(scanned) {
+  closeScan();
+  const item = sessionItems[currentIdx];
+  const el   = document.getElementById('scan-result');
+  el.style.display = 'block';
+  if (scanned === item.partNumber) {
+    el.className   = 'sr-ok';
+    el.textContent = `✓ Correct bin — ${item.name}`;
+  } else {
+    el.className   = 'sr-bad';
+    el.textContent = `Wrong bin — scanned ${scanned}, need #${item.partNumber}`;
+  }
+  document.getElementById('actual-input').focus();
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const enc = v => encodeURIComponent(v);
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+</script>
+</body>
+</html>
