@@ -59,7 +59,7 @@
     #van-screen { padding-top: 40px; }
     #van-screen h2 { font-size: 26px; font-weight: 700; }
     #van-screen p  { font-size: 15px; color: #666; }
-    select, #tech-input {
+    select {
       width: 100%; padding: 16px; border: 2px solid #ddd;
       border-radius: 12px; font-size: 18px; background: white; appearance: none;
     }
@@ -154,13 +154,9 @@
     .sr-ok  { background: #d4edda; color: #155724; }
     .sr-bad { background: #f8d7da; color: #721c24; }
 
-    /* ── Pinned footer ── */
+    /* ── Count entry + actions — sits right under the item card ── */
     .item-footer {
-      flex-shrink: 0;
-      background: #F5F0E8; border-top: 1px solid #ddd8ce;
-      padding: 14px 24px 32px; /* extra bottom for home indicator */
       display: flex; flex-direction: column; gap: 12px;
-      max-width: 640px; width: 100%; margin: 0 auto; align-self: stretch;
     }
 
     #actual-input {
@@ -187,6 +183,7 @@
     .disc-row {
       display: flex; justify-content: space-between; align-items: center;
       padding: 12px 16px; background: white; border-radius: 10px; font-size: 15px;
+      cursor: pointer;
     }
     .disc-row .d-ok  { color: #2d7a06; font-weight: 700; }
     .disc-row .d-bad { color: #a00;    font-weight: 700; }
@@ -196,8 +193,7 @@
     @media (min-width: 768px) {
       header { padding: 18px 32px; }
       header h1 { font-size: 24px; }
-      .item-content, .item-footer { padding-left: 32px; padding-right: 32px; }
-      .item-footer { padding-bottom: 40px; }
+      .item-content { padding-left: 32px; padding-right: 32px; }
       .item-card { padding: 28px 26px; }
       .footer-btns .btn { min-height: 72px; }
       #actual-input { min-height: 90px; }
@@ -220,7 +216,6 @@
   <h2>Select Your Van</h2>
   <p>Choose the van you are auditing today.</p>
   <select id="van-select"><option value="">Loading...</option></select>
-  <input type="text" id="tech-input" placeholder="Your name">
   <button class="btn btn-green" id="start-btn" disabled onclick="loadSession()">
     Load Today's Audit →
   </button>
@@ -262,6 +257,14 @@
       </div>
     </div>
 
+    <div class="item-footer">
+      <input type="number" id="actual-input" inputmode="numeric" min="0" placeholder="Count">
+      <div class="footer-btns">
+        <button class="btn btn-ghost" id="scan-btn" onclick="toggleScan()">Scan Bin</button>
+        <button class="btn btn-green" id="submit-btn" onclick="submitItem()">Submit →</button>
+      </div>
+    </div>
+
     <div id="scan-area">
       <div id="video-wrap">
         <video id="video" autoplay muted playsinline></video>
@@ -270,15 +273,6 @@
       <div id="scan-hint">Point camera at barcode on bin</div>
     </div>
     <div id="scan-result"></div>
-  </div>
-
-  <!-- Pinned to bottom -->
-  <div class="item-footer">
-    <input type="number" id="actual-input" inputmode="numeric" min="0" placeholder="Count">
-    <div class="footer-btns">
-      <button class="btn btn-ghost" id="scan-btn" onclick="toggleScan()">Scan Bin</button>
-      <button class="btn btn-green" id="submit-btn" onclick="submitItem()">Submit →</button>
-    </div>
   </div>
 </div>
 
@@ -296,7 +290,6 @@
 const GAS_URL     = 'https://script.google.com/macros/s/AKfycbyuqBkT1VBH1P6bFIfCs8dIwEGRqWPGlk7K3enA_NVqlOVasw60ZOzULEHtDm2xwiBN/exec';
 const SESSION_KEY = 'vanAuditSession';
 const QUEUE_KEY   = 'vanAuditQueue';
-const TECH_KEY    = 'vanAuditTech';
 
 let selectedVan  = '';
 let techName     = '';
@@ -308,8 +301,6 @@ let scanOpen     = false;
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async function () {
-  document.getElementById('tech-input').value = localStorage.getItem(TECH_KEY) || '';
-
   const sel = document.getElementById('van-select');
   try {
     const res  = await fetch(`${GAS_URL}?action=vans`);
@@ -344,7 +335,7 @@ function offerResume() {
   sessionItems = saved.sessionItems;
   currentIdx   = saved.currentIdx;
   sessionLog   = saved.sessionLog;
-  document.getElementById('header-right').textContent   = selectedVan.split(' - ')[0];
+  document.getElementById('header-right').textContent   = headerLabel();
   document.getElementById('header-right').style.display = 'block';
   show('item-screen');
   renderItem();
@@ -353,9 +344,8 @@ function offerResume() {
 // ── Load session ──────────────────────────────────────────────────────────────
 async function loadSession() {
   selectedVan = document.getElementById('van-select').value;
-  techName    = document.getElementById('tech-input').value.trim();
+  techName    = selectedVan.split(' - ')[1] || '';
   if (!selectedVan) return;
-  localStorage.setItem(TECH_KEY, techName);
 
   const btn = document.getElementById('start-btn');
   btn.disabled = true; btn.textContent = 'Loading…';
@@ -371,7 +361,7 @@ async function loadSession() {
     }
 
     sessionItems = data.items;
-    document.getElementById('header-right').textContent = selectedVan.split(' - ')[0];
+    document.getElementById('header-right').textContent = headerLabel();
     document.getElementById('header-right').style.display = 'block';
     document.getElementById('ov-set-label').textContent  = `Set ${data.setNum} of ${data.setTotal}`;
     document.getElementById('ov-set-name').textContent   = data.setName;
@@ -428,46 +418,25 @@ function toggleSubmittedList() {
     `${open ? '▾' : '▸'} Submitted (${sessionLog.length})`;
 }
 
-async function submitItem() {
+function submitItem() {
   const item   = sessionItems[currentIdx];
   const actual = parseInt(document.getElementById('actual-input').value);
   if (isNaN(actual) || actual < 0) { document.getElementById('actual-input').focus(); return; }
 
-  const params = `van=${enc(selectedVan)}&tech=${enc(techName)}` +
-    `&partNumber=${enc(item.partNumber)}&name=${enc(item.name)}` +
-    `&expectedQty=${item.expectedQty}&actualQty=${actual}&subId=${makeSubId()}`;
-
-  const proceed = await submitWithDupeCheck(params);
-  if (!proceed) { document.getElementById('actual-input').focus(); return; }
-
   const delta = actual - item.expectedQty;
   sessionLog.push({ ...item, actual, delta });
+  sendItem(item, actual);
 
   currentIdx++;
   saveSessionState();
   currentIdx < sessionItems.length ? renderItem() : showComplete();
 }
 
-// Checks server-side whether this van/part was already logged today; on a
-// duplicate, asks the tech whether to overwrite before actually committing.
-async function submitWithDupeCheck(params) {
-  try {
-    const res  = await fetch(`${GAS_URL}?action=submit&${params}`);
-    const data = await res.json();
-    if (data.duplicate) {
-      const overwrite = confirm(
-        `You already submitted a count for this part today (logged ${data.existing.actual}).\n\nOverwrite with the new count?`
-      );
-      if (!overwrite) return false;
-      await fetch(`${GAS_URL}?action=submit&${params}&force=true`);
-    }
-    return true;
-  } catch {
-    // Offline/network failure — queue it. Force=true since the tech already
-    // confirmed this submission; there's no one to ask once it's queued.
-    enqueue(`${GAS_URL}?action=submit&${params}&force=true`);
-    return true;
-  }
+function sendItem(item, actual) {
+  const url = `${GAS_URL}?action=submit&van=${enc(selectedVan)}&tech=${enc(techName)}` +
+    `&partNumber=${enc(item.partNumber)}&name=${enc(item.name)}` +
+    `&expectedQty=${item.expectedQty}&actualQty=${actual}&subId=${makeSubId()}`;
+  sendOrQueue(url);
 }
 
 // ── Session complete ──────────────────────────────────────────────────────────
@@ -478,11 +447,27 @@ function showComplete() {
     `${sessionLog.length} items · ${bad.length} discrepanc${bad.length === 1 ? 'y' : 'ies'}`;
   document.getElementById('disc-list').innerHTML = bad.length === 0
     ? '<div class="all-ok">✓ All items match</div>'
-    : bad.map(r => `<div class="disc-row">
+    : bad.map(r => `<div class="disc-row" onclick="editItem('${r.partNumber}')">
         <span>${r.name}</span>
         <span class="${r.delta < 0 ? 'd-bad' : 'd-ok'}">${r.delta > 0 ? '+' : ''}${r.delta}</span>
       </div>`).join('');
   show('complete-screen');
+}
+
+function editItem(partNumber) {
+  const entry = sessionLog.find(r => r.partNumber === partNumber);
+  if (!entry) return;
+
+  const input = prompt(`Re-enter count for ${entry.name} (expected ${entry.expectedQty}):`, entry.actual);
+  if (input === null) return;
+  const actual = parseInt(input);
+  if (isNaN(actual) || actual < 0) return;
+
+  entry.actual = actual;
+  entry.delta  = actual - entry.expectedQty;
+  sendItem(entry, actual);
+  saveSessionState();
+  showComplete();
 }
 
 async function endSession() {
@@ -608,6 +593,10 @@ function clearSessionState() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const enc = v => encodeURIComponent(v);
+function headerLabel() {
+  const van = selectedVan.split(' - ')[0];
+  return techName ? `${van} · ${techName}` : van;
+}
 function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
