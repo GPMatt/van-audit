@@ -32,6 +32,12 @@
       background: rgba(0,0,0,.22); padding: 5px 14px;
       border-radius: 20px; white-space: nowrap; display: none;
     }
+    #sync-badge {
+      display: none; background: #f4c542; color: #1a1a1a;
+      font-size: 13px; font-weight: 700; text-align: center;
+      padding: 6px 10px;
+    }
+    #sync-badge.show { display: block; }
 
     /* ── Shared screen base ─────────────────────────────────────────────── */
     .screen {
@@ -53,7 +59,7 @@
     #van-screen { padding-top: 40px; }
     #van-screen h2 { font-size: 26px; font-weight: 700; }
     #van-screen p  { font-size: 15px; color: #666; }
-    select {
+    select, #tech-input {
       width: 100%; padding: 16px; border: 2px solid #ddd;
       border-radius: 12px; font-size: 18px; background: white; appearance: none;
     }
@@ -75,12 +81,12 @@
     /* ── Item audit screen — full height, footer pinned ── */
     #item-screen {
       padding: 0; gap: 0; max-width: none;
-      flex: 1; overflow-y: auto;
+      flex: 1; overflow: hidden;
     }
     #item-screen.active { display: flex; flex-direction: column; }
 
     .item-content {
-      overflow-y: visible;
+      flex: 1; overflow-y: auto;
       padding: 20px 24px;
       display: flex; flex-direction: column; gap: 16px;
       max-width: 640px; width: 100%; margin: 0 auto; align-self: stretch;
@@ -192,12 +198,14 @@
   </div>
   <div id="header-right"></div>
 </header>
+<div id="sync-badge"></div>
 
 <!-- 1: Van selection -->
 <div class="screen active" id="van-screen">
   <h2>Select Your Van</h2>
   <p>Choose the van you are auditing today.</p>
   <select id="van-select"><option value="">Loading...</option></select>
+  <input type="text" id="tech-input" placeholder="Your name">
   <button class="btn btn-green" id="start-btn" disabled onclick="loadSession()">
     Load Today's Audit →
   </button>
@@ -268,9 +276,13 @@
 </div>
 
 <script>
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbyuqBkT1VBH1P6bFIfCs8dIwEGRqWPGlk7K3enA_NVqlOVasw60ZOzULEHtDm2xwiBN/exec';
+const GAS_URL     = 'https://script.google.com/macros/s/AKfycbyuqBkT1VBH1P6bFIfCs8dIwEGRqWPGlk7K3enA_NVqlOVasw60ZOzULEHtDm2xwiBN/exec';
+const SESSION_KEY = 'vanAuditSession';
+const QUEUE_KEY   = 'vanAuditQueue';
+const TECH_KEY    = 'vanAuditTech';
 
 let selectedVan  = '';
+let techName     = '';
 let sessionItems = [];
 let currentIdx   = 0;
 let sessionLog   = [];
@@ -279,6 +291,8 @@ let scanOpen     = false;
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async function () {
+  document.getElementById('tech-input').value = localStorage.getItem(TECH_KEY) || '';
+
   const sel = document.getElementById('van-select');
   try {
     const res  = await fetch(`${GAS_URL}?action=vans`);
@@ -291,12 +305,40 @@ let scanOpen     = false;
   } catch {
     sel.innerHTML = '<option value="">Error loading — check connection</option>';
   }
+
+  flushQueue();
+  setInterval(flushQueue, 20000);
+  window.addEventListener('online', flushQueue);
+
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+  offerResume();
 })();
+
+function offerResume() {
+  const saved = loadSessionState();
+  if (!saved || saved.currentIdx >= saved.sessionItems.length) return;
+  if (!confirm(`Resume unfinished audit for ${saved.van} (item ${saved.currentIdx + 1} of ${saved.sessionItems.length})?`)) {
+    clearSessionState();
+    return;
+  }
+  selectedVan  = saved.van;
+  techName     = saved.tech;
+  sessionItems = saved.sessionItems;
+  currentIdx   = saved.currentIdx;
+  sessionLog   = saved.sessionLog;
+  document.getElementById('header-right').textContent   = selectedVan.split(' - ')[0];
+  document.getElementById('header-right').style.display = 'block';
+  show('item-screen');
+  renderItem();
+}
 
 // ── Load session ──────────────────────────────────────────────────────────────
 async function loadSession() {
   selectedVan = document.getElementById('van-select').value;
+  techName    = document.getElementById('tech-input').value.trim();
   if (!selectedVan) return;
+  localStorage.setItem(TECH_KEY, techName);
 
   const btn = document.getElementById('start-btn');
   btn.disabled = true; btn.textContent = 'Loading…';
@@ -327,6 +369,7 @@ async function loadSession() {
 // ── Audit flow ────────────────────────────────────────────────────────────────
 function beginAudit() {
   currentIdx = 0; sessionLog = [];
+  saveSessionState();
   show('item-screen');
   renderItem();
 }
@@ -358,13 +401,14 @@ async function submitItem() {
   const delta = actual - item.expectedQty;
   sessionLog.push({ ...item, actual, delta });
 
-  fetch(
-    `${GAS_URL}?action=submit&van=${enc(selectedVan)}&partNumber=${enc(item.partNumber)}` +
-    `&name=${enc(item.name)}&expectedQty=${item.expectedQty}&actualQty=${actual}`,
-    { mode: 'no-cors' }
-  );
+  const subId = makeSubId();
+  const url = `${GAS_URL}?action=submit&van=${enc(selectedVan)}&tech=${enc(techName)}` +
+    `&partNumber=${enc(item.partNumber)}&name=${enc(item.name)}` +
+    `&expectedQty=${item.expectedQty}&actualQty=${actual}&subId=${subId}`;
+  await sendOrQueue(url);
 
   currentIdx++;
+  saveSessionState();
   currentIdx < sessionItems.length ? renderItem() : showComplete();
 }
 
@@ -384,7 +428,11 @@ function showComplete() {
 }
 
 async function endSession() {
-  fetch(`${GAS_URL}?action=completeSession&van=${enc(selectedVan)}`, { mode: 'no-cors' });
+  const url = `${GAS_URL}?action=completeSession&van=${enc(selectedVan)}` +
+    `&tech=${enc(techName)}&log=${enc(JSON.stringify(sessionLog))}`;
+  await sendOrQueue(url);
+
+  clearSessionState();
   selectedVan = '';
   document.getElementById('header-right').style.display = 'none';
   document.getElementById('start-btn').disabled    = true;
@@ -419,14 +467,85 @@ function verifyBarcode(scanned) {
   const item = sessionItems[currentIdx];
   const el   = document.getElementById('scan-result');
   el.style.display = 'block';
+
   if (scanned === item.partNumber) {
     el.className = 'sr-ok';
     el.textContent = `✓ Correct bin`;
+    document.getElementById('actual-input').focus();
+    return;
+  }
+
+  // Not the prompted item — but it might be another item in this week's set.
+  const matchIdx = sessionItems.findIndex((it, i) => i !== currentIdx && it.partNumber === scanned);
+  if (matchIdx !== -1) {
+    const matched = sessionItems[matchIdx];
+    const switchToIt = confirm(
+      `Scanned "${matched.name}" (#${matched.partNumber}) — part of this week's audit, ` +
+      `but not the item you're currently counting.\n\n` +
+      `OK = switch to it now\nCancel = keep counting "${item.name}"`
+    );
+    if (switchToIt) {
+      [sessionItems[currentIdx], sessionItems[matchIdx]] = [sessionItems[matchIdx], sessionItems[currentIdx]];
+      renderItem();
+      return;
+    }
+    el.className = 'sr-bad';
+    el.textContent = `Continuing with ${item.name}`;
   } else {
     el.className = 'sr-bad';
-    el.textContent = `Wrong bin — scanned ${scanned}, need #${item.partNumber}`;
+    el.textContent = `Not in this week's audit — scanned ${scanned}`;
   }
   document.getElementById('actual-input').focus();
+}
+
+// ── Network: send now, or queue for retry on failure ──────────────────────────
+async function sendOrQueue(url) {
+  try {
+    await fetch(url, { mode: 'no-cors' });
+  } catch {
+    enqueue(url);
+  }
+}
+
+function makeSubId() {
+  return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+}
+
+function loadQueue() {
+  try { return JSON.parse(localStorage.getItem(QUEUE_KEY)) || []; } catch { return []; }
+}
+function saveQueue(q) {
+  localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+  document.getElementById('sync-badge').classList.toggle('show', q.length > 0);
+  document.getElementById('sync-badge').textContent = q.length ? `${q.length} pending sync…` : '';
+}
+function enqueue(url) {
+  const q = loadQueue();
+  q.push(url);
+  saveQueue(q);
+}
+async function flushQueue() {
+  let q = loadQueue();
+  if (!q.length) return;
+  const remaining = [];
+  for (const url of q) {
+    try { await fetch(url, { mode: 'no-cors' }); }
+    catch { remaining.push(url); }
+  }
+  saveQueue(remaining);
+}
+
+// ── Session persistence (survives reload / backgrounding mid-audit) ──────────
+function saveSessionState() {
+  localStorage.setItem(SESSION_KEY, JSON.stringify({
+    van: selectedVan, tech: techName, sessionItems, currentIdx, sessionLog,
+  }));
+}
+function loadSessionState() {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch { return null; }
+}
+function clearSessionState() {
+  localStorage.removeItem(SESSION_KEY);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
