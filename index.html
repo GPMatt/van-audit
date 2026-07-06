@@ -97,6 +97,21 @@
     .prog-fill { background: #7CB518; height: 7px; border-radius: 4px; transition: width .25s; }
     .prog-lbl  { font-size: 13px; color: #999; text-align: right; margin-top: 5px; }
 
+    #submitted-toggle {
+      font-size: 13px; color: #7CB518; font-weight: 700;
+      cursor: pointer; margin-top: 8px; user-select: none;
+    }
+    #submitted-list {
+      display: none; margin-top: 8px; flex-direction: column; gap: 6px;
+      max-height: 160px; overflow-y: auto;
+    }
+    #submitted-list.open { display: flex; }
+    .sub-row {
+      display: flex; justify-content: space-between; align-items: center;
+      background: white; border-radius: 8px; padding: 8px 12px; font-size: 14px;
+    }
+    .sub-empty { font-size: 13px; color: #999; text-align: center; padding: 8px; }
+
     /* Item card */
     .item-card {
       background: white; border-radius: 14px;
@@ -234,6 +249,8 @@
     <div>
       <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
       <div class="prog-lbl" id="prog-lbl"></div>
+      <div id="submitted-toggle" onclick="toggleSubmittedList()">▸ Submitted (<span id="submitted-count">0</span>)</div>
+      <div id="submitted-list"></div>
     </div>
 
     <div class="item-card">
@@ -390,7 +407,25 @@ function renderItem() {
   sr.style.display = 'none'; sr.className = ''; sr.textContent = '';
   document.getElementById('scan-btn').textContent = 'Scan Bin';
 
+  renderSubmittedList();
   setTimeout(() => document.getElementById('actual-input').focus(), 150);
+}
+
+function renderSubmittedList() {
+  document.getElementById('submitted-count').textContent = sessionLog.length;
+  document.getElementById('submitted-list').innerHTML = sessionLog.length
+    ? sessionLog.map(r => `<div class="sub-row">
+        <span>${r.name}</span>
+        <span class="${r.delta < 0 ? 'd-bad' : r.delta > 0 ? 'd-ok' : ''}">${r.actual}${r.delta !== 0 ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}</span>
+      </div>`).join('')
+    : '<div class="sub-empty">None yet</div>';
+}
+
+function toggleSubmittedList() {
+  const list = document.getElementById('submitted-list');
+  const open = list.classList.toggle('open');
+  document.getElementById('submitted-toggle').textContent =
+    `${open ? '▾' : '▸'} Submitted (${sessionLog.length})`;
 }
 
 async function submitItem() {
@@ -398,18 +433,41 @@ async function submitItem() {
   const actual = parseInt(document.getElementById('actual-input').value);
   if (isNaN(actual) || actual < 0) { document.getElementById('actual-input').focus(); return; }
 
+  const params = `van=${enc(selectedVan)}&tech=${enc(techName)}` +
+    `&partNumber=${enc(item.partNumber)}&name=${enc(item.name)}` +
+    `&expectedQty=${item.expectedQty}&actualQty=${actual}&subId=${makeSubId()}`;
+
+  const proceed = await submitWithDupeCheck(params);
+  if (!proceed) { document.getElementById('actual-input').focus(); return; }
+
   const delta = actual - item.expectedQty;
   sessionLog.push({ ...item, actual, delta });
-
-  const subId = makeSubId();
-  const url = `${GAS_URL}?action=submit&van=${enc(selectedVan)}&tech=${enc(techName)}` +
-    `&partNumber=${enc(item.partNumber)}&name=${enc(item.name)}` +
-    `&expectedQty=${item.expectedQty}&actualQty=${actual}&subId=${subId}`;
-  await sendOrQueue(url);
 
   currentIdx++;
   saveSessionState();
   currentIdx < sessionItems.length ? renderItem() : showComplete();
+}
+
+// Checks server-side whether this van/part was already logged today; on a
+// duplicate, asks the tech whether to overwrite before actually committing.
+async function submitWithDupeCheck(params) {
+  try {
+    const res  = await fetch(`${GAS_URL}?action=submit&${params}`);
+    const data = await res.json();
+    if (data.duplicate) {
+      const overwrite = confirm(
+        `You already submitted a count for this part today (logged ${data.existing.actual}).\n\nOverwrite with the new count?`
+      );
+      if (!overwrite) return false;
+      await fetch(`${GAS_URL}?action=submit&${params}&force=true`);
+    }
+    return true;
+  } catch {
+    // Offline/network failure — queue it. Force=true since the tech already
+    // confirmed this submission; there's no one to ask once it's queued.
+    enqueue(`${GAS_URL}?action=submit&${params}&force=true`);
+    return true;
+  }
 }
 
 // ── Session complete ──────────────────────────────────────────────────────────
