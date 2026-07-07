@@ -158,6 +158,11 @@
     .item-footer {
       display: flex; flex-direction: column; gap: 12px;
     }
+    #nav-link {
+      display: none; font-size: 13px; color: #7CB518; font-weight: 700;
+      cursor: pointer; user-select: none;
+    }
+    #nav-link.show { display: block; }
 
     #actual-input {
       width: 100%; padding: 16px;
@@ -185,8 +190,9 @@
       padding: 12px 16px; background: white; border-radius: 10px; font-size: 15px;
       cursor: pointer;
     }
-    .disc-row .d-ok  { color: #2d7a06; font-weight: 700; }
-    .disc-row .d-bad { color: #a00;    font-weight: 700; }
+    .disc-row .d-ok    { color: #2d7a06; font-weight: 700; }
+    .disc-row .d-bad   { color: #a00;    font-weight: 700; }
+    .disc-row .d-match { color: #999;    font-weight: 700; }
     .all-ok { text-align: center; color: #2d7a06; font-weight: 700; padding: 22px; font-size: 17px; }
 
     /* ── iPad: wider breakpoint tweaks ── */
@@ -258,6 +264,7 @@
     </div>
 
     <div class="item-footer">
+      <div id="nav-link"></div>
       <input type="number" id="actual-input" inputmode="numeric" min="0" placeholder="Count">
       <div class="footer-btns">
         <button class="btn btn-ghost" id="scan-btn" onclick="toggleScan()">Scan Bin</button>
@@ -298,6 +305,7 @@ let currentIdx   = 0;
 let sessionLog   = [];
 let codeReader   = null;
 let scanOpen     = false;
+let editingPrev  = false;
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async function () {
@@ -382,6 +390,7 @@ function beginAudit() {
 }
 
 function renderItem() {
+  editingPrev = false;
   const item = sessionItems[currentIdx];
   const pct  = (currentIdx / sessionItems.length) * 100;
 
@@ -391,14 +400,73 @@ function renderItem() {
   document.getElementById('item-pn').textContent   = `# ${item.partNumber}`;
   document.getElementById('item-exp').textContent  = item.expectedQty;
   document.getElementById('actual-input').value    = '';
+  document.getElementById('submit-btn').textContent = 'Submit →';
 
   closeScan();
   const sr = document.getElementById('scan-result');
   sr.style.display = 'none'; sr.className = ''; sr.textContent = '';
   document.getElementById('scan-btn').textContent = 'Scan Bin';
 
+  updateNavLink();
   renderSubmittedList();
   setTimeout(() => document.getElementById('actual-input').focus(), 150);
+}
+
+// ── Go back one step to fix the item you just submitted ──────────────────────
+function updateNavLink() {
+  const nav = document.getElementById('nav-link');
+  if (editingPrev) {
+    nav.textContent = '→ Resume without changes';
+    nav.onclick = resumeForward;
+    nav.classList.add('show');
+  } else if (currentIdx > 0) {
+    nav.textContent = '‹ Fix previous item';
+    nav.onclick = goBack;
+    nav.classList.add('show');
+  } else {
+    nav.classList.remove('show');
+  }
+}
+
+function goBack() {
+  if (currentIdx === 0 || editingPrev) return;
+  editingPrev = true;
+
+  const item  = sessionItems[currentIdx - 1];
+  const entry = sessionLog.find(r => r.partNumber === item.partNumber);
+
+  document.getElementById('item-name').textContent  = item.name;
+  document.getElementById('item-pn').textContent    = `# ${item.partNumber}`;
+  document.getElementById('item-exp').textContent    = item.expectedQty;
+  document.getElementById('actual-input').value      = entry ? entry.actual : '';
+  document.getElementById('submit-btn').textContent  = 'Update →';
+
+  closeScan();
+  const sr = document.getElementById('scan-result');
+  sr.style.display = 'none'; sr.className = ''; sr.textContent = '';
+  document.getElementById('scan-btn').textContent = 'Scan Bin';
+
+  updateNavLink();
+  setTimeout(() => document.getElementById('actual-input').focus(), 150);
+}
+
+function resumeForward() {
+  renderItem();
+}
+
+function updatePrevItem(actual) {
+  const item  = sessionItems[currentIdx - 1];
+  const entry = sessionLog.find(r => r.partNumber === item.partNumber);
+  if (!entry) { resumeForward(); return; }
+
+  if (actual === entry.actual) { resumeForward(); return; }
+  if (!confirm(`Change ${item.name} from ${entry.actual} to ${actual}?`)) return;
+
+  entry.actual = actual;
+  entry.delta  = actual - item.expectedQty;
+  sendItem(item, actual);
+  saveSessionState();
+  resumeForward();
 }
 
 function renderSubmittedList() {
@@ -419,10 +487,12 @@ function toggleSubmittedList() {
 }
 
 function submitItem() {
-  const item   = sessionItems[currentIdx];
   const actual = parseInt(document.getElementById('actual-input').value);
   if (isNaN(actual) || actual < 0) { document.getElementById('actual-input').focus(); return; }
 
+  if (editingPrev) { updatePrevItem(actual); return; }
+
+  const item  = sessionItems[currentIdx];
   const delta = actual - item.expectedQty;
   sessionLog.push({ ...item, actual, delta });
   sendItem(item, actual);
@@ -445,11 +515,11 @@ function showComplete() {
   const bad = sessionLog.filter(r => r.delta !== 0);
   document.getElementById('done-summary').textContent =
     `${sessionLog.length} items · ${bad.length} discrepanc${bad.length === 1 ? 'y' : 'ies'}`;
-  document.getElementById('disc-list').innerHTML = bad.length === 0
-    ? '<div class="all-ok">✓ All items match</div>'
-    : bad.map(r => `<div class="disc-row" onclick="editItem('${r.partNumber}')">
+  document.getElementById('disc-list').innerHTML =
+    (bad.length === 0 ? '<div class="all-ok">✓ All items match</div>' : '') +
+    sessionLog.map(r => `<div class="disc-row" onclick="editItem('${r.partNumber}')">
         <span>${r.name}</span>
-        <span class="${r.delta < 0 ? 'd-bad' : 'd-ok'}">${r.delta > 0 ? '+' : ''}${r.delta}</span>
+        <span class="${r.delta < 0 ? 'd-bad' : r.delta > 0 ? 'd-ok' : 'd-match'}">${r.actual}${r.delta !== 0 ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}</span>
       </div>`).join('');
   show('complete-screen');
 }
@@ -507,37 +577,49 @@ function closeScan() {
 
 function verifyBarcode(scanned) {
   closeScan();
-  const item = sessionItems[currentIdx];
-  const el   = document.getElementById('scan-result');
+  const current = editingPrev ? sessionItems[currentIdx - 1] : sessionItems[currentIdx];
+  const el = document.getElementById('scan-result');
   el.style.display = 'block';
 
-  if (scanned === item.partNumber) {
+  if (scanned === current.partNumber) {
     el.className = 'sr-ok';
     el.textContent = `✓ Correct bin`;
     document.getElementById('actual-input').focus();
     return;
   }
 
-  // Not the prompted item — but it might be another item in this week's set.
-  const matchIdx = sessionItems.findIndex((it, i) => i !== currentIdx && it.partNumber === scanned);
-  if (matchIdx !== -1) {
-    const matched = sessionItems[matchIdx];
-    const switchToIt = confirm(
-      `Scanned "${matched.name}" (#${matched.partNumber}) — part of this week's audit, ` +
-      `but not the item you're currently counting.\n\n` +
-      `OK = switch to it now\nCancel = keep counting "${item.name}"`
-    );
-    if (switchToIt) {
-      [sessionItems[currentIdx], sessionItems[matchIdx]] = [sessionItems[matchIdx], sessionItems[currentIdx]];
-      renderItem();
+  // Scanned the item you just did — jump back to fix it instead of a dead-end "wrong bin".
+  if (!editingPrev && currentIdx > 0 && sessionItems[currentIdx - 1].partNumber === scanned) {
+    goBack();
+    return;
+  }
+
+  // Not the prompted item — but it might be an upcoming item in this week's set.
+  // Only matches items still ahead (i > currentIdx): swapping in an already-submitted
+  // item here would silently drop whatever it displaced, since currentIdx never rewinds.
+  if (!editingPrev) {
+    const matchIdx = sessionItems.findIndex((it, i) => i > currentIdx && it.partNumber === scanned);
+    if (matchIdx !== -1) {
+      const matched = sessionItems[matchIdx];
+      const switchToIt = confirm(
+        `Scanned "${matched.name}" (#${matched.partNumber}) — part of this week's audit, ` +
+        `but not the item you're currently counting.\n\n` +
+        `OK = switch to it now\nCancel = keep counting "${current.name}"`
+      );
+      if (switchToIt) {
+        [sessionItems[currentIdx], sessionItems[matchIdx]] = [sessionItems[matchIdx], sessionItems[currentIdx]];
+        renderItem();
+        return;
+      }
+      el.className = 'sr-bad';
+      el.textContent = `Continuing with ${current.name}`;
+      document.getElementById('actual-input').focus();
       return;
     }
-    el.className = 'sr-bad';
-    el.textContent = `Continuing with ${item.name}`;
-  } else {
-    el.className = 'sr-bad';
-    el.textContent = `Not in this week's audit — scanned ${scanned}`;
   }
+
+  el.className = 'sr-bad';
+  el.textContent = `Not in this week's audit — scanned ${scanned}`;
   document.getElementById('actual-input').focus();
 }
 
