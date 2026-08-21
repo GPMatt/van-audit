@@ -3,7 +3,6 @@ const ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  './icon-192.png',
   'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js',
 ];
 
