@@ -387,7 +387,7 @@ async function loadSession() {
 
     document.getElementById('header-right').textContent = `${selectedVanLabel} · ${selectedTechName}`;
     document.getElementById('header-right').style.display = 'block';
-    document.getElementById('ov-label').textContent = sessionType === 'jason_supervised' ? 'Jason-Supervised Audit' : 'Solo Audit';
+    document.getElementById('ov-label').textContent = sessionType === 'jason_supervised' ? `${selectedTechName}-Supervised Audit` : 'Solo Audit';
     document.getElementById('ov-name').textContent  = selectedVanLabel;
     document.getElementById('ov-count').textContent = `${sessionItems.length} items`;
     show('overview-screen');
