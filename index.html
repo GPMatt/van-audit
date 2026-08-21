@@ -122,18 +122,18 @@
     .sr-bad { background: #f8d7da; color: #721c24; }
 
     .item-footer { display: flex; flex-direction: column; gap: 12px; }
-    #nav-link { display: none; font-size: 13px; color: #7CB518; font-weight: 700; cursor: pointer; user-select: none; }
-    #nav-link.show { display: block; }
 
     #actual-input {
       width: 100%; padding: 16px; border: 2.5px solid #7CB518; border-radius: 12px;
       font-size: clamp(32px, 6vw, 48px); font-weight: 800; text-align: center; background: white; color: #111; min-height: 78px;
     }
 
+    .nav-btns { display: flex; gap: 12px; }
+    .nav-btns .btn { font-size: clamp(15px, 2.2vw, 18px); min-height: 54px; }
+    .btn-ghost:disabled { opacity: .4; cursor: default; }
+
     .footer-btns { display: flex; gap: 12px; }
     .footer-btns .btn { font-size: clamp(16px, 2.5vw, 20px); min-height: 62px; }
-    #scan-btn { flex: 1; }
-    #submit-btn { flex: 2; }
 
     /* Reason panel — only shown when a count doesn't match */
     #reason-panel {
@@ -230,6 +230,15 @@
       <div id="submitted-list"></div>
     </div>
 
+    <div id="scan-area">
+      <div id="video-wrap">
+        <video id="video" autoplay muted playsinline></video>
+        <div class="aim-line"></div>
+      </div>
+      <div id="scan-hint">Point camera at barcode on bin</div>
+    </div>
+    <div id="scan-result"></div>
+
     <div class="item-card" id="item-card">
       <h3 id="item-name"></h3>
       <div class="item-sku" id="item-pn"></div>
@@ -240,7 +249,6 @@
     </div>
 
     <div class="item-footer">
-      <div id="nav-link"></div>
       <input type="number" id="actual-input" inputmode="numeric" min="0" placeholder="Count">
 
       <div id="reason-panel">
@@ -253,20 +261,14 @@
 
       <div id="submit-error" class="error-box" style="display:none;"></div>
 
+      <div class="nav-btns">
+        <button class="btn btn-ghost" id="last-btn" onclick="goLast()">◀ Last</button>
+        <button class="btn btn-ghost" id="next-btn" onclick="goNext()">Next ▶</button>
+      </div>
       <div class="footer-btns">
-        <button class="btn btn-ghost" id="scan-btn" onclick="toggleScan()">Scan Bin</button>
         <button class="btn btn-green" id="submit-btn" onclick="submitItem()">Submit →</button>
       </div>
     </div>
-
-    <div id="scan-area">
-      <div id="video-wrap">
-        <video id="video" autoplay muted playsinline></video>
-        <div class="aim-line"></div>
-      </div>
-      <div id="scan-hint">Point camera at barcode on bin</div>
-    </div>
-    <div id="scan-result"></div>
   </div>
 </div>
 
@@ -296,8 +298,8 @@ let sessionId = '', sessionType = 'solo', parSyncId = '';
 let sessionItems = [];   // { partId, partNumber, name, expectedQty, lineId? }
 let currentIdx = 0;
 let sessionLog = [];     // submitted/edited entries, keyed by partId
-let codeReader = null, scanOpen = false;
-let editingPartId = null;      // set when re-opening an already-submitted item
+let codeReader = null;
+let lastScannedCode = null, lastScannedAt = 0;
 let pendingMismatch = false;   // reason panel is open, waiting on a reason before submit
 
 const REASON_DETAIL = {
@@ -410,39 +412,61 @@ function beginAudit() {
 }
 
 function renderItem() {
-  editingPartId = null; pendingMismatch = false;
+  pendingMismatch = false;
   const item = sessionItems[currentIdx];
   const pct  = (currentIdx / sessionItems.length) * 100;
+  const existing = sessionLog.find(r => r.partId === item.partId);
 
   document.getElementById('prog-fill').style.width = pct + '%';
   document.getElementById('prog-lbl').textContent  = `Item ${currentIdx + 1} of ${sessionItems.length}`;
   document.getElementById('item-name').textContent = item.name;
   document.getElementById('item-pn').textContent   = `# ${item.partNumber}`;
   document.getElementById('item-exp').textContent  = item.expectedQty;
-  document.getElementById('item-card').classList.remove('mismatch');
-  document.getElementById('actual-input').value    = '';
-  document.getElementById('submit-btn').textContent = 'Submit →';
+  document.getElementById('item-card').classList.toggle('mismatch', !!existing && existing.delta !== 0);
+  document.getElementById('actual-input').value    = existing ? existing.actual : '';
+  document.getElementById('submit-btn').textContent = existing ? 'Save Edit →' : 'Submit →';
   document.getElementById('submit-btn').disabled = false;
   hideReasonPanel();
   hideSubmitError();
 
-  closeScan();
+  if (existing && existing.delta !== 0) {
+    showReasonPanel();
+    const cc = causeCodes.find(c => c.id === existing.causeCodeId);
+    if (cc) {
+      document.getElementById('reason-select').value = cc.id;
+      renderReasonDetail(cc.code);
+      (REASON_DETAIL[cc.code] || []).forEach(f => {
+        const key = f.split(':')[0];
+        const input = document.getElementById(`rd-${key}`);
+        if (input && existing.reasonPayload) input.value = existing.reasonPayload[key] || '';
+      });
+      checkReasonReady();
+    }
+  }
+
   const sr = document.getElementById('scan-result');
   sr.style.display = 'none'; sr.className = ''; sr.textContent = '';
-  document.getElementById('scan-btn').textContent = 'Scan Bin';
 
-  updateNavLink();
+  updateNavButtons();
   renderSubmittedList();
   setTimeout(() => document.getElementById('actual-input').focus(), 150);
 }
 
-function updateNavLink() {
-  const nav = document.getElementById('nav-link');
-  if (editingPartId) {
-    nav.textContent = '→ Cancel edit'; nav.onclick = () => renderItem(); nav.classList.add('show');
-  } else {
-    nav.classList.remove('show');
-  }
+function updateNavButtons() {
+  document.getElementById('last-btn').disabled = currentIdx === 0;
+  document.getElementById('next-btn').disabled = currentIdx === sessionItems.length - 1;
+}
+function goLast() { if (currentIdx > 0) { currentIdx--; renderItem(); } }
+function goNext() { if (currentIdx < sessionItems.length - 1) { currentIdx++; renderItem(); } }
+
+// Jump straight to a specific part — used by the submitted list, the
+// complete-screen review list, and by scanning a bin's barcode.
+function goToPart(partId) {
+  const idx = sessionItems.findIndex(i => i.partId === partId);
+  if (idx === -1) return;
+  currentIdx = idx;
+  show('item-screen');
+  renderItem();
 }
 
 // ── Reason panel — only appears when the count doesn't match ─────────────────
@@ -506,14 +530,14 @@ function showSubmitError(msg) {
 function hideSubmitError() { document.getElementById('submit-error').style.display = 'none'; }
 
 // ── Submit (or update) one line — a real confirmed write, not fire-and-forget ─
+// Doubles as "Next": on success it advances to the next part in inventory-
+// guide order (the alternate to scanning the next bin yourself).
 async function submitItem() {
   const raw = document.getElementById('actual-input').value;
   const actual = parseInt(raw, 10);
   if (raw === '' || isNaN(actual) || actual < 0) { document.getElementById('actual-input').focus(); return; }
 
-  const item = editingPartId
-    ? sessionItems.find(i => i.partId === editingPartId)
-    : sessionItems[currentIdx];
+  const item = sessionItems[currentIdx];
   const mismatch = actual !== item.expectedQty;
 
   if (mismatch && !pendingMismatch) { showReasonPanel(); return; }
@@ -542,7 +566,7 @@ async function submitItem() {
         actual_qty: actual, ...reasonPayload,
       }).eq('id', existing.lineId);
       if (error) throw error;
-      Object.assign(existing, { actual, delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id });
+      Object.assign(existing, { actual, delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id, reasonPayload });
     } else {
       const { data, error } = await sb.from('audit_lines').insert({
         session_id: sessionId, part_id: item.partId, expected_qty: item.expectedQty,
@@ -550,7 +574,7 @@ async function submitItem() {
       }).select().single();
       if (error) throw error;
       sessionLog.push({ partId: item.partId, name: item.name, actual, expectedQty: item.expectedQty,
-        delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id, lineId: data.id });
+        delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id, reasonPayload, lineId: data.id });
     }
   } catch (err) {
     btn.disabled = false; btn.textContent = originalLabel;
@@ -558,16 +582,26 @@ async function submitItem() {
     return;
   }
 
-  if (editingPartId) { renderItem(); return; }
+  advanceAfterSubmit();
+}
 
-  currentIdx++;
-  currentIdx < sessionItems.length ? renderItem() : showComplete();
+function advanceAfterSubmit() {
+  if (sessionLog.length === sessionItems.length) { showComplete(); return; }
+  if (currentIdx < sessionItems.length - 1) {
+    currentIdx++;
+  } else {
+    // At the end of the list with stragglers left (some got skipped via
+    // Next/scan along the way) — jump to the first one still missing.
+    const firstMissingIdx = sessionItems.findIndex(it => !sessionLog.some(r => r.partId === it.partId));
+    if (firstMissingIdx !== -1) currentIdx = firstMissingIdx;
+  }
+  renderItem();
 }
 
 function renderSubmittedList() {
   document.getElementById('submitted-count').textContent = sessionLog.length;
   document.getElementById('submitted-list').innerHTML = sessionLog.length
-    ? sessionLog.map(r => `<div class="sub-row" onclick="editItem('${r.partId}')">
+    ? sessionLog.map(r => `<div class="sub-row" onclick="goToPart('${r.partId}')">
         <span>${r.name}</span>
         <span class="${r.delta < 0 ? 'd-bad' : r.delta > 0 ? 'd-ok' : ''}">${r.actual}${r.delta !== 0 ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}</span>
       </div>`).join('')
@@ -580,52 +614,19 @@ function toggleSubmittedList() {
     `${open ? '▾' : '▸'} Submitted (${sessionLog.length}) — tap any to edit`;
 }
 
-// ── Edit any previously submitted item — no longer limited to "the one before" ─
-function editItem(partId) {
-  const entry = sessionLog.find(r => r.partId === partId);
-  const item  = sessionItems.find(i => i.partId === partId);
-  if (!entry || !item) return;
-
-  editingPartId = partId;
-  document.getElementById('item-name').textContent = item.name;
-  document.getElementById('item-pn').textContent   = `# ${item.partNumber}`;
-  document.getElementById('item-exp').textContent  = item.expectedQty;
-  document.getElementById('actual-input').value    = entry.actual;
-  document.getElementById('submit-btn').textContent = 'Save Edit →';
-  document.getElementById('submit-btn').disabled = false;
-  hideReasonPanel(); hideSubmitError();
-  document.getElementById('item-card').classList.toggle('mismatch', entry.delta !== 0);
-
-  if (entry.delta !== 0) {
-    showReasonPanel();
-    const cc = causeCodes.find(c => c.id === entry.causeCodeId);
-    if (cc) {
-      document.getElementById('reason-select').value = cc.id;
-      renderReasonDetail(cc.code);
-    }
-    document.getElementById('submit-btn').disabled = false;
-  }
-
-  updateNavLink();
-  show('item-screen');
-  setTimeout(() => document.getElementById('actual-input').focus(), 150);
-}
-
 // ── Session complete ──────────────────────────────────────────────────────────
 function showComplete() {
-  closeScan();
   const bad = sessionLog.filter(r => r.delta !== 0);
   document.getElementById('done-summary').textContent =
     `${sessionLog.length} items · ${bad.length} discrepanc${bad.length === 1 ? 'y' : 'ies'}`;
   document.getElementById('disc-list').innerHTML =
     (bad.length === 0 ? '<div class="all-ok">✓ All items match</div>' : '') +
-    sessionLog.map(r => `<div class="disc-row" onclick="editFromComplete('${r.partId}')">
+    sessionLog.map(r => `<div class="disc-row" onclick="goToPart('${r.partId}')">
         <span>${r.name}</span>
         <span class="${r.delta < 0 ? 'd-bad' : r.delta > 0 ? 'd-ok' : 'd-match'}">${r.actual}${r.delta !== 0 ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}</span>
       </div>`).join('');
   show('complete-screen');
 }
-function editFromComplete(partId) { editItem(partId); }
 
 async function endSession() {
   const btn = document.getElementById('end-btn');
@@ -647,29 +648,33 @@ async function endSession() {
   show('start-screen');
 }
 
-// ── Barcode scan — identifies the bin; the count is always typed by hand ─────
-function toggleScan() { scanOpen ? closeScan() : openScan(); }
-
+// ── Barcode scan — the main way to move through the audit: scan a bin, its ──
+// part comes up with the qty box ready, type the count. The camera stays
+// live for the whole audit (see show()) rather than needing to be reopened
+// per item. Scanning ANY part's barcode jumps straight to it, wherever it
+// falls in the list — techs walk the van, not the app's ordering.
 function openScan() {
-  scanOpen = true;
   document.getElementById('scan-area').classList.add('open');
-  document.getElementById('scan-btn').textContent = 'Close Camera';
+  document.getElementById('scan-hint').textContent = 'Point camera at barcode on bin';
   codeReader = new ZXing.BrowserMultiFormatReader();
   codeReader.decodeFromVideoDevice(null, 'video', (result) => {
-    if (result) verifyBarcode(result.getText());
+    if (!result) return;
+    const text = result.getText();
+    const now = Date.now();
+    if (text === lastScannedCode && now - lastScannedAt < 1500) return; // same code, still in frame
+    lastScannedCode = text; lastScannedAt = now;
+    handleScan(text);
+  }).catch(() => {
+    document.getElementById('scan-hint').textContent = 'Camera unavailable — type the count manually.';
   });
 }
 function closeScan() {
-  scanOpen = false;
   if (codeReader) { try { codeReader.reset(); } catch (_) {} codeReader = null; }
   document.getElementById('scan-area').classList.remove('open');
-  const sb2 = document.getElementById('scan-btn');
-  if (sb2) sb2.textContent = 'Scan Bin';
 }
 
-function verifyBarcode(scanned) {
-  closeScan();
-  const current = editingPartId ? sessionItems.find(i => i.partId === editingPartId) : sessionItems[currentIdx];
+function handleScan(scanned) {
+  const current = sessionItems[currentIdx];
   const el = document.getElementById('scan-result');
   el.style.display = 'block';
 
@@ -679,28 +684,22 @@ function verifyBarcode(scanned) {
     return;
   }
 
-  if (!editingPartId) {
-    const matchIdx = sessionItems.findIndex((it, i) => i > currentIdx && it.partNumber === scanned);
-    if (matchIdx !== -1) {
-      const matched = sessionItems[matchIdx];
-      const switchToIt = confirm(
-        `Scanned "${matched.name}" (#${matched.partNumber}) — later in this audit, not the item you're on.\n\n` +
-        `OK = switch to it now\nCancel = keep counting "${current.name}"`
-      );
-      if (switchToIt) {
-        [sessionItems[currentIdx], sessionItems[matchIdx]] = [sessionItems[matchIdx], sessionItems[currentIdx]];
-        renderItem();
-        return;
-      }
-      el.className = 'sr-bad'; el.textContent = `Continuing with ${current.name}`;
-      document.getElementById('actual-input').focus();
-      return;
-    }
+  // A different-item scan mid-reason-entry would blow away what's typed —
+  // ignore it rather than jump away silently.
+  if (pendingMismatch) return;
+
+  const matchIdx = sessionItems.findIndex(it => it.partNumber === scanned);
+  if (matchIdx !== -1) {
+    const matchedName = sessionItems[matchIdx].name;
+    currentIdx = matchIdx;
+    renderItem(); // clears scan-result — reset it after
+    el.style.display = 'block'; el.className = 'sr-ok'; el.textContent = `✓ ${matchedName}`;
+    document.getElementById('actual-input').focus();
+    return;
   }
 
   el.className = 'sr-bad';
   el.textContent = `Not expected on this van — scanned ${scanned}`;
-  document.getElementById('actual-input').focus();
 }
 
 // ── Retry queue — only for genuine network failures, never fire-and-forget ───
@@ -734,9 +733,13 @@ async function flushRetryQueue() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function show(id) {
+  const wasItemScreen = document.getElementById('item-screen').classList.contains('active');
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   document.body.classList.toggle('audit-active', id === 'item-screen');
+  // Camera runs for the whole time the audit screen is up, not per item.
+  if (id === 'item-screen' && !wasItemScreen) openScan();
+  if (id !== 'item-screen' && wasItemScreen) closeScan();
 }
 </script>
 </body>
