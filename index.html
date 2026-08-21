@@ -129,11 +129,10 @@
     }
 
     .nav-btns { display: flex; gap: 12px; }
-    .nav-btns .btn { font-size: clamp(15px, 2.2vw, 18px); min-height: 54px; }
+    .nav-btns .btn { font-size: clamp(16px, 2.5vw, 20px); min-height: 62px; }
+    .nav-btns #last-btn { flex: 1; }
+    .nav-btns #submit-btn { flex: 2; }
     .btn-ghost:disabled { opacity: .4; cursor: default; }
-
-    .footer-btns { display: flex; gap: 12px; }
-    .footer-btns .btn { font-size: clamp(16px, 2.5vw, 20px); min-height: 62px; }
 
     /* Reason panel — only shown when a count doesn't match */
     #reason-panel {
@@ -168,7 +167,7 @@
       header h1 { font-size: 24px; }
       .item-content { padding-left: 32px; padding-right: 32px; }
       .item-card { padding: 28px 26px; }
-      .footer-btns .btn { min-height: 72px; }
+      .nav-btns .btn { min-height: 72px; }
       #actual-input { min-height: 90px; }
     }
   </style>
@@ -197,6 +196,11 @@
     <label class="field-label">Van</label>
     <select id="van-select"><option value="">Loading…</option></select>
   </div>
+
+  <label style="display:flex; align-items:center; gap:10px; font-size:14px; color:#666;">
+    <input type="checkbox" id="test-session-check" style="width:18px; height:18px;">
+    Test session (won't appear in reports, safe to throw away)
+  </label>
 
   <div id="start-error" class="error-box" style="display:none;"></div>
   <button class="btn btn-green" id="start-btn" disabled onclick="loadSession()">
@@ -263,10 +267,7 @@
 
       <div class="nav-btns">
         <button class="btn btn-ghost" id="last-btn" onclick="goLast()">◀ Last</button>
-        <button class="btn btn-ghost" id="next-btn" onclick="goNext()">Next ▶</button>
-      </div>
-      <div class="footer-btns">
-        <button class="btn btn-green" id="submit-btn" onclick="submitItem()">Submit →</button>
+        <button class="btn btn-green" id="submit-btn" onclick="submitItem()">Next →</button>
       </div>
     </div>
   </div>
@@ -350,6 +351,10 @@ function showStartError(msg) {
 }
 
 // ── Load session: latest baseline + every part expected on this van ──────────
+// Resumes an already-started session for this tech+van rather than creating
+// a duplicate — a reload, a backgrounded tab, or hitting Back and reloading
+// used to silently fork a new session every time, splitting real counts
+// across multiple orphaned rows (see project notes, 2026-08-21).
 async function loadSession() {
   const techSel = document.getElementById('tech-select');
   const vanSel  = document.getElementById('van-select');
@@ -357,6 +362,7 @@ async function loadSession() {
   selectedTechName = techSel.selectedOptions[0].textContent;
   selectedVanId    = vanSel.value;
   selectedVanLabel = vanSel.selectedOptions[0].textContent;
+  const isTest = document.getElementById('test-session-check').checked;
 
   const tech = techs.find(t => t.id === selectedTechId);
   sessionType = tech && tech.role === 'supervisor' ? 'jason_supervised' : 'solo';
@@ -381,17 +387,54 @@ async function loadSession() {
       .map(r => ({ partId: r.parts.id, partNumber: r.parts.part_number, name: r.parts.name, expectedQty: r.expected_qty }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    const { data: session, error: sessErr } = await sb.from('audit_sessions')
-      .insert({ van_id: selectedVanId, tech_id: selectedTechId, session_type: sessionType, par_sync_id: parSyncId })
-      .select().single();
-    if (sessErr) throw sessErr;
-    sessionId = session.id;
+    // A dangling in-progress session for this tech+van from an OLDER
+    // baseline is stale, not resumable — its expected quantities no longer
+    // apply. Close it out rather than leave it as permanent dead weight.
+    await sb.from('audit_sessions').update({ status: 'abandoned' })
+      .eq('van_id', selectedVanId).eq('tech_id', selectedTechId)
+      .eq('status', 'in_progress').neq('par_sync_id', parSyncId);
 
-    document.getElementById('header-right').textContent = `${selectedVanLabel} · ${selectedTechName}`;
+    const { data: openSessions, error: openErr } = await sb.from('audit_sessions')
+      .select('id').eq('van_id', selectedVanId).eq('tech_id', selectedTechId)
+      .eq('par_sync_id', parSyncId).eq('status', 'in_progress')
+      .order('started_at', { ascending: false }).limit(1);
+    if (openErr) throw openErr;
+
+    sessionLog = [];
+    if (openSessions.length) {
+      sessionId = openSessions[0].id;
+      const { data: existingLines, error: linesErr } = await sb.from('audit_lines')
+        .select('id, part_id, actual_qty, delta, cause_code_id, wo_property, wo_unit, wo_number, borrowed_to, expected_order_date')
+        .eq('session_id', sessionId);
+      if (linesErr) throw linesErr;
+      sessionLog = existingLines.map(l => {
+        const item = sessionItems.find(i => i.partId === l.part_id);
+        return {
+          partId: l.part_id, name: item ? item.name : '', actual: l.actual_qty,
+          expectedQty: item ? item.expectedQty : l.actual_qty - l.delta,
+          delta: l.delta, causeCodeId: l.cause_code_id,
+          reasonPayload: {
+            cause_code_id: l.cause_code_id, wo_property: l.wo_property, wo_unit: l.wo_unit,
+            wo_number: l.wo_number, borrowed_to: l.borrowed_to, expected_order_date: l.expected_order_date,
+          },
+          lineId: l.id,
+        };
+      });
+    } else {
+      const { data: session, error: sessErr } = await sb.from('audit_sessions')
+        .insert({ van_id: selectedVanId, tech_id: selectedTechId, session_type: sessionType, par_sync_id: parSyncId, is_test: isTest })
+        .select().single();
+      if (sessErr) throw sessErr;
+      sessionId = session.id;
+    }
+
+    document.getElementById('header-right').textContent = `${selectedVanLabel} · ${selectedTechName}${isTest ? ' · TEST' : ''}`;
     document.getElementById('header-right').style.display = 'block';
     document.getElementById('ov-label').textContent = sessionType === 'jason_supervised' ? `${selectedTechName}-Supervised Audit` : 'Solo Audit';
     document.getElementById('ov-name').textContent  = selectedVanLabel;
-    document.getElementById('ov-count').textContent = `${sessionItems.length} items`;
+    document.getElementById('ov-count').textContent = sessionLog.length
+      ? `${sessionItems.length} items · resuming, ${sessionLog.length} already counted`
+      : `${sessionItems.length} items`;
     show('overview-screen');
   } catch (err) {
     showStartError('Failed to start session — check connection and try again.');
@@ -406,7 +449,12 @@ function resetStartBtn() {
 
 // ── Audit flow ────────────────────────────────────────────────────────────────
 function beginAudit() {
-  currentIdx = 0; sessionLog = [];
+  // sessionLog may already be populated here — loadSession() resumes an
+  // in-progress session rather than starting blank. Land on the first
+  // uncounted item, or straight at Complete if a resume finds nothing left.
+  if (sessionLog.length === sessionItems.length) { showComplete(); return; }
+  const firstMissingIdx = sessionItems.findIndex(it => !sessionLog.some(r => r.partId === it.partId));
+  currentIdx = firstMissingIdx !== -1 ? firstMissingIdx : 0;
   show('item-screen');
   renderItem();
 }
@@ -424,7 +472,7 @@ function renderItem() {
   document.getElementById('item-exp').textContent  = item.expectedQty;
   document.getElementById('item-card').classList.toggle('mismatch', !!existing && existing.delta !== 0);
   document.getElementById('actual-input').value    = existing ? existing.actual : '';
-  document.getElementById('submit-btn').textContent = existing ? 'Save Edit →' : 'Submit →';
+  document.getElementById('submit-btn').textContent = existing ? 'Save Edit →' : 'Next →';
   document.getElementById('submit-btn').disabled = false;
   hideReasonPanel();
   hideSubmitError();
@@ -454,10 +502,8 @@ function renderItem() {
 
 function updateNavButtons() {
   document.getElementById('last-btn').disabled = currentIdx === 0;
-  document.getElementById('next-btn').disabled = currentIdx === sessionItems.length - 1;
 }
 function goLast() { if (currentIdx > 0) { currentIdx--; renderItem(); } }
-function goNext() { if (currentIdx < sessionItems.length - 1) { currentIdx++; renderItem(); } }
 
 // Jump straight to a specific part — used by the submitted list, the
 // complete-screen review list, and by scanning a bin's barcode.
@@ -643,6 +689,7 @@ async function endSession() {
   document.getElementById('header-right').style.display = 'none';
   document.getElementById('tech-select').value = '';
   document.getElementById('van-select').value = '';
+  document.getElementById('test-session-check').checked = false;
   document.getElementById('start-btn').disabled = true;
   btn.disabled = false; btn.textContent = 'End Session';
   show('start-screen');
