@@ -9,6 +9,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -17,7 +18,6 @@
       background: #F5F0E8; color: #1a1a1a;
       display: flex; flex-direction: column; min-height: 100dvh;
     }
-    /* Lock scroll when auditing so footer stays pinned */
     body.audit-active { height: 100dvh; overflow: hidden; }
 
     header {
@@ -39,7 +39,6 @@
     }
     #sync-badge.show { display: block; }
 
-    /* ── Shared screen base ─────────────────────────────────────────────── */
     .screen {
       display: none; flex-direction: column; gap: 16px;
       padding: 24px; width: 100%; max-width: 640px; margin: 0 auto;
@@ -54,17 +53,19 @@
     .btn-green          { background: #7CB518; color: white; }
     .btn-green:disabled { background: #bbb; cursor: default; }
     .btn-ghost          { background: #e0d9cf; color: #222; }
+    .btn-amber          { background: #f4c542; color: #1a1a1a; }
+    .btn-amber:disabled { background: #e6dcb8; color: #999; cursor: default; }
 
-    /* ── Van selection ── */
-    #van-screen { padding-top: 40px; }
-    #van-screen h2 { font-size: 26px; font-weight: 700; }
-    #van-screen p  { font-size: 15px; color: #666; }
-    select {
+    #start-screen { padding-top: 32px; }
+    #start-screen h2 { font-size: 26px; font-weight: 700; }
+    #start-screen p  { font-size: 15px; color: #666; }
+    label.field-label { font-size: 13px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: .5px; }
+    select, input[type=text], input[type=date] {
       width: 100%; padding: 16px; border: 2px solid #ddd;
       border-radius: 12px; font-size: 18px; background: white; appearance: none;
     }
+    .field-group { display: flex; flex-direction: column; gap: 6px; }
 
-    /* ── Session overview ── */
     #overview-screen { padding-top: 32px; }
     .set-badge {
       background: #7CB518; color: white; border-radius: 14px;
@@ -78,7 +79,6 @@
       font-size: 15px; color: #555; line-height: 1.75;
     }
 
-    /* ── Item audit screen — full height, footer pinned ── */
     #item-screen {
       padding: 0; gap: 0; max-width: none;
       flex: 1; overflow: hidden;
@@ -92,84 +92,42 @@
       max-width: 640px; width: 100%; margin: 0 auto; align-self: stretch;
     }
 
-    /* Progress */
     .prog-bar  { background: #ddd; border-radius: 4px; height: 7px; }
     .prog-fill { background: #7CB518; height: 7px; border-radius: 4px; transition: width .25s; }
     .prog-lbl  { font-size: 13px; color: #999; text-align: right; margin-top: 5px; }
 
-    #submitted-toggle {
-      font-size: 13px; color: #7CB518; font-weight: 700;
-      cursor: pointer; margin-top: 8px; user-select: none;
-    }
-    #submitted-list {
-      display: none; margin-top: 8px; flex-direction: column; gap: 6px;
-      max-height: 160px; overflow-y: auto;
-    }
+    #submitted-toggle { font-size: 13px; color: #7CB518; font-weight: 700; cursor: pointer; margin-top: 8px; user-select: none; }
+    #submitted-list { display: none; margin-top: 8px; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto; }
     #submitted-list.open { display: flex; }
-    .sub-row {
-      display: flex; justify-content: space-between; align-items: center;
-      background: white; border-radius: 8px; padding: 8px 12px; font-size: 14px;
-    }
+    .sub-row { display: flex; justify-content: space-between; align-items: center; background: white; border-radius: 8px; padding: 8px 12px; font-size: 14px; cursor: pointer; }
     .sub-empty { font-size: 13px; color: #999; text-align: center; padding: 8px; }
 
-    /* Item card */
-    .item-card {
-      background: white; border-radius: 14px;
-      padding: 22px 20px; border-left: 5px solid #7CB518;
-    }
-    .item-card h3 {
-      font-size: clamp(18px, 3vw, 24px);
-      font-weight: 700; line-height: 1.3; color: #1a1a1a;
-    }
-    .item-sku {
-      font-size: clamp(22px, 4vw, 32px);
-      font-weight: 800; color: #111;
-      letter-spacing: 0.5px; margin-top: 10px;
-    }
-    .exp-row {
-      display: flex; justify-content: space-between; align-items: center;
-      margin-top: 16px; padding-top: 16px; border-top: 1px solid #f0ebe2;
-    }
+    .item-card { background: white; border-radius: 14px; padding: 22px 20px; border-left: 5px solid #7CB518; }
+    .item-card.mismatch { border-left-color: #d9534f; }
+    .item-card h3 { font-size: clamp(18px, 3vw, 24px); font-weight: 700; line-height: 1.3; color: #1a1a1a; }
+    .item-sku { font-size: clamp(22px, 4vw, 32px); font-weight: 800; color: #111; letter-spacing: 0.5px; margin-top: 10px; }
+    .exp-row { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid #f0ebe2; }
     .exp-lbl { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: .5px; }
     .exp-val { font-size: clamp(40px, 8vw, 60px); font-weight: 800; color: #1a1a1a; }
 
-    /* Scan area */
     #scan-area { display: none; flex-direction: column; gap: 10px; }
     #scan-area.open { display: flex; }
     #video-wrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; }
     #video      { width: 100%; display: block; max-height: 220px; object-fit: cover; }
-    .aim-line   {
-      position: absolute; inset: 0;
-      display: flex; align-items: center; justify-content: center; pointer-events: none;
-    }
-    .aim-line::before {
-      content: ''; width: 65%; height: 2px;
-      background: #7CB518; box-shadow: 0 0 10px #7CB518;
-    }
+    .aim-line   { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+    .aim-line::before { content: ''; width: 65%; height: 2px; background: #7CB518; box-shadow: 0 0 10px #7CB518; }
     #scan-hint { text-align: center; font-size: 14px; color: #888; }
-    #scan-result {
-      display: none; text-align: center; padding: 12px 16px;
-      border-radius: 10px; font-weight: 700; font-size: 15px;
-    }
+    #scan-result { display: none; text-align: center; padding: 12px 16px; border-radius: 10px; font-weight: 700; font-size: 15px; }
     .sr-ok  { background: #d4edda; color: #155724; }
     .sr-bad { background: #f8d7da; color: #721c24; }
 
-    /* ── Count entry + actions — sits right under the item card ── */
-    .item-footer {
-      display: flex; flex-direction: column; gap: 12px;
-    }
-    #nav-link {
-      display: none; font-size: 13px; color: #7CB518; font-weight: 700;
-      cursor: pointer; user-select: none;
-    }
+    .item-footer { display: flex; flex-direction: column; gap: 12px; }
+    #nav-link { display: none; font-size: 13px; color: #7CB518; font-weight: 700; cursor: pointer; user-select: none; }
     #nav-link.show { display: block; }
 
     #actual-input {
-      width: 100%; padding: 16px;
-      border: 2.5px solid #7CB518; border-radius: 12px;
-      font-size: clamp(32px, 6vw, 48px); font-weight: 800;
-      text-align: center; background: white; color: #111;
-      min-height: 78px;
+      width: 100%; padding: 16px; border: 2.5px solid #7CB518; border-radius: 12px;
+      font-size: clamp(32px, 6vw, 48px); font-weight: 800; text-align: center; background: white; color: #111; min-height: 78px;
     }
 
     .footer-btns { display: flex; gap: 12px; }
@@ -177,25 +135,34 @@
     #scan-btn { flex: 1; }
     #submit-btn { flex: 2; }
 
-    /* ── Session complete ── */
-    #complete-screen { padding-top: 32px; }
-    .done-badge {
-      background: #7CB518; color: white; border-radius: 14px;
-      padding: 28px 24px; text-align: center;
+    /* Reason panel — only shown when a count doesn't match */
+    #reason-panel {
+      display: none; flex-direction: column; gap: 12px;
+      background: #fff6e0; border: 2px solid #f4c542; border-radius: 12px; padding: 16px;
     }
+    #reason-panel.open { display: flex; }
+    #reason-panel .rp-title { font-size: 14px; font-weight: 700; color: #7a5c00; }
+    #reason-detail { display: none; flex-direction: column; gap: 10px; }
+    #reason-detail.open { display: flex; }
+
+    #complete-screen { padding-top: 32px; }
+    .done-badge { background: #7CB518; color: white; border-radius: 14px; padding: 28px 24px; text-align: center; }
     .done-badge h2 { font-size: 26px; font-weight: 700; }
     .done-badge p  { font-size: 15px; opacity: .85; margin-top: 8px; }
-    .disc-row {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 12px 16px; background: white; border-radius: 10px; font-size: 15px;
-      cursor: pointer;
-    }
+    .disc-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: white; border-radius: 10px; font-size: 15px; cursor: pointer; }
     .disc-row .d-ok    { color: #2d7a06; font-weight: 700; }
     .disc-row .d-bad   { color: #a00;    font-weight: 700; }
     .disc-row .d-match { color: #999;    font-weight: 700; }
     .all-ok { text-align: center; color: #2d7a06; font-weight: 700; padding: 22px; font-size: 17px; }
 
-    /* ── iPad: wider breakpoint tweaks ── */
+    .spinner {
+      display: inline-block; width: 18px; height: 18px; border: 3px solid rgba(255,255,255,.4);
+      border-top-color: white; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-box { background: #f8d7da; color: #721c24; border-radius: 10px; padding: 14px 16px; font-size: 14px; }
+
     @media (min-width: 768px) {
       header { padding: 18px 32px; }
       header h1 { font-size: 24px; }
@@ -217,11 +184,21 @@
 </header>
 <div id="sync-badge"></div>
 
-<!-- 1: Van selection -->
-<div class="screen active" id="van-screen">
-  <h2>Select Your Van</h2>
-  <p>Choose the van you are auditing today.</p>
-  <select id="van-select"><option value="">Loading...</option></select>
+<!-- 1: Who + which van — two independent choices, neither implies the other -->
+<div class="screen active" id="start-screen">
+  <h2>Start an Audit</h2>
+  <p>Pick your name and the van you're counting. These are separate — the van never assumes who's driving it.</p>
+
+  <div class="field-group">
+    <label class="field-label">Your Name</label>
+    <select id="tech-select"><option value="">Loading…</option></select>
+  </div>
+  <div class="field-group">
+    <label class="field-label">Van</label>
+    <select id="van-select"><option value="">Loading…</option></select>
+  </div>
+
+  <div id="start-error" class="error-box" style="display:none;"></div>
   <button class="btn btn-green" id="start-btn" disabled onclick="loadSession()">
     Load Today's Audit →
   </button>
@@ -230,31 +207,30 @@
 <!-- 2: Session overview -->
 <div class="screen" id="overview-screen">
   <div class="set-badge">
-    <div class="set-label" id="ov-set-label"></div>
-    <div class="set-name"  id="ov-set-name"></div>
-    <div class="set-count" id="ov-item-count"></div>
+    <div class="set-label" id="ov-label"></div>
+    <div class="set-name"  id="ov-name"></div>
+    <div class="set-count" id="ov-count"></div>
   </div>
   <div class="info-box">
-    Items are presented one at a time.<br>
-    Enter the actual count you find in the van.<br>
-    Discrepancies are logged and emailed automatically.<br>
-    Use Scan Bin to verify you're at the correct bin.
+    Every part on this van gets counted, every visit — nothing is skipped by rotation.<br>
+    Enter the actual count you find in each bin.<br>
+    Any count that doesn't match asks for a reason before it can be submitted.
   </div>
   <button class="btn btn-green" onclick="beginAudit()">Begin →</button>
-  <button class="btn btn-ghost" onclick="show('van-screen')">← Change Van</button>
+  <button class="btn btn-ghost" onclick="show('start-screen')">← Change Van / Name</button>
 </div>
 
-<!-- 3: Item audit — scrollable content + pinned footer -->
+<!-- 3: Item audit -->
 <div class="screen" id="item-screen">
   <div class="item-content">
     <div>
       <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
       <div class="prog-lbl" id="prog-lbl"></div>
-      <div id="submitted-toggle" onclick="toggleSubmittedList()">▸ Submitted (<span id="submitted-count">0</span>)</div>
+      <div id="submitted-toggle" onclick="toggleSubmittedList()">▸ Submitted (<span id="submitted-count">0</span>) — tap any to edit</div>
       <div id="submitted-list"></div>
     </div>
 
-    <div class="item-card">
+    <div class="item-card" id="item-card">
       <h3 id="item-name"></h3>
       <div class="item-sku" id="item-pn"></div>
       <div class="exp-row">
@@ -266,6 +242,17 @@
     <div class="item-footer">
       <div id="nav-link"></div>
       <input type="number" id="actual-input" inputmode="numeric" min="0" placeholder="Count">
+
+      <div id="reason-panel">
+        <div class="rp-title">Count doesn't match — why?</div>
+        <select id="reason-select">
+          <option value="">Select a reason…</option>
+        </select>
+        <div id="reason-detail"></div>
+      </div>
+
+      <div id="submit-error" class="error-box" style="display:none;"></div>
+
       <div class="footer-btns">
         <button class="btn btn-ghost" id="scan-btn" onclick="toggleScan()">Scan Bin</button>
         <button class="btn btn-green" id="submit-btn" onclick="submitItem()">Submit →</button>
@@ -286,111 +273,144 @@
 <!-- 4: Session complete -->
 <div class="screen" id="complete-screen">
   <div class="done-badge">
-    <h2>Session Complete</h2>
+    <h2>Audit Complete</h2>
     <p id="done-summary"></p>
   </div>
   <div id="disc-list"></div>
-  <button class="btn btn-green" onclick="endSession()">End Session</button>
+  <button class="btn btn-green" id="end-btn" onclick="endSession()">End Session</button>
 </div>
 
 <script>
-const GAS_URL     = 'https://script.google.com/macros/s/AKfycbyuqBkT1VBH1P6bFIfCs8dIwEGRqWPGlk7K3enA_NVqlOVasw60ZOzULEHtDm2xwiBN/exec';
-const SESSION_KEY = 'vanAuditSession';
-const QUEUE_KEY   = 'vanAuditQueue';
+// ── Fill these in from Supabase: Project Settings -> API ─────────────────────
+const SUPABASE_URL      = 'YOUR_SUPABASE_PROJECT_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+// ───────────────────────────────────────────────────────────────────────────
 
-let selectedVan  = '';
-let techName     = '';
-let sessionItems = [];
-let currentIdx   = 0;
-let sessionLog   = [];
-let codeReader   = null;
-let scanOpen     = false;
-let editingPrev  = false;
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const QUEUE_KEY = 'vanAuditRetryQueue';
+
+let techs = [], vans = [], causeCodes = [];
+let selectedTechId = '', selectedTechName = '', selectedVanId = '', selectedVanLabel = '';
+let sessionId = '', sessionType = 'solo', parSyncId = '';
+let sessionItems = [];   // { partId, partNumber, name, expectedQty, lineId? }
+let currentIdx = 0;
+let sessionLog = [];     // submitted/edited entries, keyed by partId
+let codeReader = null, scanOpen = false;
+let editingPartId = null;      // set when re-opening an already-submitted item
+let pendingMismatch = false;   // reason panel is open, waiting on a reason before submit
+
+const REASON_DETAIL = {
+  not_on_wo:      ['wo_property:Property', 'wo_unit:Unit', 'wo_number:Work Order #'],
+  borrowed:       ['borrowed_to:Which van or account received it?'],
+  never_received: ['expected_order_date:Date it was supposed to arrive|date'],
+};
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async function () {
-  const sel = document.getElementById('van-select');
   try {
-    const res  = await fetch(`${GAS_URL}?action=vans`);
-    const data = await res.json();
-    sel.innerHTML = '<option value="">— Select Van —</option>' +
-      data.vans.map(v => `<option value="${v}">${v}</option>`).join('');
-    sel.onchange = () => {
-      document.getElementById('start-btn').disabled = !sel.value;
-    };
-  } catch {
-    sel.innerHTML = '<option value="">Error loading — check connection</option>';
+    const [t, v, c] = await Promise.all([
+      sb.from('techs').select('id,name,role').eq('active', true).order('name'),
+      sb.from('vans').select('id,label').eq('active', true).order('label'),
+      sb.from('cause_codes').select('id,code,label').eq('active', true).order('id'),
+    ]);
+    if (t.error || v.error || c.error) throw (t.error || v.error || c.error);
+    techs = t.data; vans = v.data; causeCodes = c.data;
+
+    const techSel = document.getElementById('tech-select');
+    techSel.innerHTML = '<option value="">— Select Your Name —</option>' +
+      techs.map(x => `<option value="${x.id}">${x.name}</option>`).join('');
+
+    const vanSel = document.getElementById('van-select');
+    vanSel.innerHTML = '<option value="">— Select Van —</option>' +
+      vans.map(x => `<option value="${x.id}">${x.label}</option>`).join('');
+
+    [techSel, vanSel].forEach(el => el.onchange = checkStartReady);
+  } catch (err) {
+    showStartError('Could not load techs/vans — check connection.');
   }
 
-  flushQueue();
-  setInterval(flushQueue, 20000);
-  window.addEventListener('online', flushQueue);
-
+  flushRetryQueue();
+  setInterval(flushRetryQueue, 20000);
+  window.addEventListener('online', flushRetryQueue);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-
-  offerResume();
 })();
 
-function offerResume() {
-  const saved = loadSessionState();
-  if (!saved || saved.currentIdx >= saved.sessionItems.length) return;
-  if (!confirm(`Resume unfinished audit for ${saved.van} (item ${saved.currentIdx + 1} of ${saved.sessionItems.length})?`)) {
-    clearSessionState();
-    return;
-  }
-  selectedVan  = saved.van;
-  techName     = saved.tech;
-  sessionItems = saved.sessionItems;
-  currentIdx   = saved.currentIdx;
-  sessionLog   = saved.sessionLog;
-  document.getElementById('header-right').textContent   = headerLabel();
-  document.getElementById('header-right').style.display = 'block';
-  show('item-screen');
-  renderItem();
+function checkStartReady() {
+  const techSel = document.getElementById('tech-select');
+  const vanSel  = document.getElementById('van-select');
+  document.getElementById('start-btn').disabled = !(techSel.value && vanSel.value);
 }
 
-// ── Load session ──────────────────────────────────────────────────────────────
+function showStartError(msg) {
+  const el = document.getElementById('start-error');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+// ── Load session: latest baseline + every part expected on this van ──────────
 async function loadSession() {
-  selectedVan = document.getElementById('van-select').value;
-  techName    = selectedVan.split(' - ')[1] || '';
-  if (!selectedVan) return;
+  const techSel = document.getElementById('tech-select');
+  const vanSel  = document.getElementById('van-select');
+  selectedTechId   = techSel.value;
+  selectedTechName = techSel.selectedOptions[0].textContent;
+  selectedVanId    = vanSel.value;
+  selectedVanLabel = vanSel.selectedOptions[0].textContent;
+
+  const tech = techs.find(t => t.id === selectedTechId);
+  sessionType = tech && tech.role === 'supervisor' ? 'jason_supervised' : 'solo';
 
   const btn = document.getElementById('start-btn');
   btn.disabled = true; btn.textContent = 'Loading…';
 
   try {
-    const res  = await fetch(`${GAS_URL}?action=getSession&van=${enc(selectedVan)}`);
-    const data = await res.json();
+    const { data: syncs, error: syncErr } = await sb.from('par_syncs')
+      .select('id').eq('status', 'ok').order('synced_at', { ascending: false }).limit(1);
+    if (syncErr) throw syncErr;
+    if (!syncs.length) { showStartError('No inventory baseline found yet — Monday sync may not have run.'); resetStartBtn(); return; }
+    parSyncId = syncs[0].id;
 
-    if (!data.items || data.items.length === 0) {
-      alert('No items found for this van in the current set. Check Live Inventory sheet.');
-      btn.disabled = false; btn.textContent = 'Load Today\'s Audit →';
-      return;
-    }
+    const { data: parRows, error: parErr } = await sb.from('van_par')
+      .select('expected_qty, parts(id, part_number, name)')
+      .eq('van_id', selectedVanId).eq('par_sync_id', parSyncId);
+    if (parErr) throw parErr;
+    if (!parRows.length) { showStartError('No items found for this van in the current baseline.'); resetStartBtn(); return; }
 
-    sessionItems = data.items;
-    document.getElementById('header-right').textContent = headerLabel();
+    sessionItems = parRows
+      .map(r => ({ partId: r.parts.id, partNumber: r.parts.part_number, name: r.parts.name, expectedQty: r.expected_qty }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const { data: session, error: sessErr } = await sb.from('audit_sessions')
+      .insert({ van_id: selectedVanId, tech_id: selectedTechId, session_type: sessionType, par_sync_id: parSyncId })
+      .select().single();
+    if (sessErr) throw sessErr;
+    sessionId = session.id;
+
+    document.getElementById('header-right').textContent = `${selectedVanLabel} · ${selectedTechName}`;
     document.getElementById('header-right').style.display = 'block';
-    document.getElementById('ov-set-label').textContent  = `Set ${data.setNum} of ${data.setTotal}`;
-    document.getElementById('ov-set-name').textContent   = data.setName;
-    document.getElementById('ov-item-count').textContent = `${data.items.length} items`;
+    document.getElementById('ov-label').textContent = sessionType === 'jason_supervised' ? 'Jason-Supervised Audit' : 'Solo Audit';
+    document.getElementById('ov-name').textContent  = selectedVanLabel;
+    document.getElementById('ov-count').textContent = `${sessionItems.length} items`;
     show('overview-screen');
-  } catch {
-    alert('Failed to load session. Check connection and try again.');
-    btn.disabled = false; btn.textContent = 'Load Today\'s Audit →';
+  } catch (err) {
+    showStartError('Failed to start session — check connection and try again.');
+  } finally {
+    resetStartBtn();
   }
+}
+function resetStartBtn() {
+  const btn = document.getElementById('start-btn');
+  btn.disabled = false; btn.textContent = 'Load Today\'s Audit →';
 }
 
 // ── Audit flow ────────────────────────────────────────────────────────────────
 function beginAudit() {
   currentIdx = 0; sessionLog = [];
-  saveSessionState();
   show('item-screen');
   renderItem();
 }
 
 function renderItem() {
-  editingPrev = false;
+  editingPartId = null; pendingMismatch = false;
   const item = sessionItems[currentIdx];
   const pct  = (currentIdx / sessionItems.length) * 100;
 
@@ -399,8 +419,12 @@ function renderItem() {
   document.getElementById('item-name').textContent = item.name;
   document.getElementById('item-pn').textContent   = `# ${item.partNumber}`;
   document.getElementById('item-exp').textContent  = item.expectedQty;
+  document.getElementById('item-card').classList.remove('mismatch');
   document.getElementById('actual-input').value    = '';
   document.getElementById('submit-btn').textContent = 'Submit →';
+  document.getElementById('submit-btn').disabled = false;
+  hideReasonPanel();
+  hideSubmitError();
 
   closeScan();
   const sr = document.getElementById('scan-result');
@@ -412,101 +436,179 @@ function renderItem() {
   setTimeout(() => document.getElementById('actual-input').focus(), 150);
 }
 
-// ── Go back one step to fix the item you just submitted ──────────────────────
 function updateNavLink() {
   const nav = document.getElementById('nav-link');
-  if (editingPrev) {
-    nav.textContent = '→ Resume without changes';
-    nav.onclick = resumeForward;
-    nav.classList.add('show');
-  } else if (currentIdx > 0) {
-    nav.textContent = '‹ Fix previous item';
-    nav.onclick = goBack;
-    nav.classList.add('show');
+  if (editingPartId) {
+    nav.textContent = '→ Cancel edit'; nav.onclick = () => renderItem(); nav.classList.add('show');
   } else {
     nav.classList.remove('show');
   }
 }
 
-function goBack() {
-  if (currentIdx === 0 || editingPrev) return;
-  editingPrev = true;
-
-  const item  = sessionItems[currentIdx - 1];
-  const entry = sessionLog.find(r => r.partNumber === item.partNumber);
-
-  document.getElementById('item-name').textContent  = item.name;
-  document.getElementById('item-pn').textContent    = `# ${item.partNumber}`;
-  document.getElementById('item-exp').textContent    = item.expectedQty;
-  document.getElementById('actual-input').value      = entry ? entry.actual : '';
-  document.getElementById('submit-btn').textContent  = 'Update →';
-
-  closeScan();
-  const sr = document.getElementById('scan-result');
-  sr.style.display = 'none'; sr.className = ''; sr.textContent = '';
-  document.getElementById('scan-btn').textContent = 'Scan Bin';
-
-  updateNavLink();
-  setTimeout(() => document.getElementById('actual-input').focus(), 150);
+// ── Reason panel — only appears when the count doesn't match ─────────────────
+function buildReasonSelect() {
+  const sel = document.getElementById('reason-select');
+  sel.innerHTML = '<option value="">Select a reason…</option>' +
+    causeCodes.map(c => `<option value="${c.id}" data-code="${c.code}">${c.label}</option>`).join('');
+  sel.onchange = () => renderReasonDetail(sel.selectedOptions[0]?.dataset.code);
 }
 
-function resumeForward() {
-  renderItem();
+function renderReasonDetail(code) {
+  const wrap = document.getElementById('reason-detail');
+  const fields = REASON_DETAIL[code];
+  if (!fields) { wrap.classList.remove('open'); wrap.innerHTML = ''; checkReasonReady(); return; }
+
+  wrap.innerHTML = fields.map(f => {
+    const [key, rest] = f.split(':');
+    const [labelPart, type] = rest.split('|');
+    const inputType = type === 'date' ? 'date' : 'text';
+    return `<div class="field-group"><label class="field-label">${labelPart}</label>
+      <input type="${inputType}" id="rd-${key}" data-key="${key}" oninput="checkReasonReady()"></div>`;
+  }).join('');
+  wrap.classList.add('open');
+  checkReasonReady();
 }
 
-function updatePrevItem(actual) {
-  const item  = sessionItems[currentIdx - 1];
-  const entry = sessionLog.find(r => r.partNumber === item.partNumber);
-  if (!entry) { resumeForward(); return; }
+function checkReasonReady() {
+  const reasonId = document.getElementById('reason-select').value;
+  const detailInputs = [...document.querySelectorAll('#reason-detail input')];
+  const detailFilled = detailInputs.every(i => i.value.trim());
+  document.getElementById('submit-btn').disabled = !(reasonId && detailFilled);
+}
 
-  if (actual === entry.actual) { resumeForward(); return; }
-  if (!confirm(`Change ${item.name} from ${entry.actual} to ${actual}?`)) return;
+function showReasonPanel() {
+  buildReasonSelect();
+  document.getElementById('reason-panel').classList.add('open');
+  document.getElementById('item-card').classList.add('mismatch');
+  document.getElementById('submit-btn').textContent = 'Confirm & Submit →';
+  document.getElementById('submit-btn').disabled = true;
+  pendingMismatch = true;
+}
+function hideReasonPanel() {
+  document.getElementById('reason-panel').classList.remove('open');
+  document.getElementById('reason-detail').classList.remove('open');
+  document.getElementById('reason-detail').innerHTML = '';
+  document.getElementById('reason-select').value = '';
+  pendingMismatch = false;
+}
 
-  entry.actual = actual;
-  entry.delta  = actual - item.expectedQty;
-  sendItem(item, actual);
-  saveSessionState();
-  resumeForward();
+function collectReasonPayload() {
+  const causeCodeId = document.getElementById('reason-select').value || null;
+  const payload = { cause_code_id: causeCodeId };
+  document.querySelectorAll('#reason-detail input').forEach(i => { payload[i.dataset.key] = i.value.trim(); });
+  return payload;
+}
+
+function showSubmitError(msg) {
+  const el = document.getElementById('submit-error');
+  el.textContent = msg; el.style.display = 'block';
+}
+function hideSubmitError() { document.getElementById('submit-error').style.display = 'none'; }
+
+// ── Submit (or update) one line — a real confirmed write, not fire-and-forget ─
+async function submitItem() {
+  const raw = document.getElementById('actual-input').value;
+  const actual = parseInt(raw, 10);
+  if (raw === '' || isNaN(actual) || actual < 0) { document.getElementById('actual-input').focus(); return; }
+
+  const item = editingPartId
+    ? sessionItems.find(i => i.partId === editingPartId)
+    : sessionItems[currentIdx];
+  const mismatch = actual !== item.expectedQty;
+
+  if (mismatch && !pendingMismatch) { showReasonPanel(); return; }
+  if (mismatch && pendingMismatch && document.getElementById('submit-btn').disabled) return;
+
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.innerHTML = '<span class="spinner"></span>';
+  hideSubmitError();
+
+  const reasonPayload = mismatch ? collectReasonPayload() : { cause_code_id: null };
+  const existing = sessionLog.find(r => r.partId === item.partId);
+
+  try {
+    if (existing && existing.lineId) {
+      await sb.from('audit_line_edits').insert({
+        audit_line_id: existing.lineId,
+        previous_actual_qty: existing.actual,
+        previous_cause_code_id: existing.causeCodeId || null,
+        new_actual_qty: actual,
+        new_cause_code_id: reasonPayload.cause_code_id,
+        edited_by: selectedTechId,
+      });
+      const { error } = await sb.from('audit_lines').update({
+        actual_qty: actual, ...reasonPayload,
+      }).eq('id', existing.lineId);
+      if (error) throw error;
+      Object.assign(existing, { actual, delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id });
+    } else {
+      const { data, error } = await sb.from('audit_lines').insert({
+        session_id: sessionId, part_id: item.partId, expected_qty: item.expectedQty,
+        actual_qty: actual, ...reasonPayload,
+      }).select().single();
+      if (error) throw error;
+      sessionLog.push({ partId: item.partId, name: item.name, actual, expectedQty: item.expectedQty,
+        delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id, lineId: data.id });
+    }
+  } catch (err) {
+    btn.disabled = false; btn.textContent = originalLabel;
+    showSubmitError('Submit failed — check connection and try again. Nothing was skipped.');
+    return;
+  }
+
+  if (editingPartId) { renderItem(); return; }
+
+  currentIdx++;
+  currentIdx < sessionItems.length ? renderItem() : showComplete();
 }
 
 function renderSubmittedList() {
   document.getElementById('submitted-count').textContent = sessionLog.length;
   document.getElementById('submitted-list').innerHTML = sessionLog.length
-    ? sessionLog.map(r => `<div class="sub-row">
+    ? sessionLog.map(r => `<div class="sub-row" onclick="editItem('${r.partId}')">
         <span>${r.name}</span>
         <span class="${r.delta < 0 ? 'd-bad' : r.delta > 0 ? 'd-ok' : ''}">${r.actual}${r.delta !== 0 ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}</span>
       </div>`).join('')
     : '<div class="sub-empty">None yet</div>';
 }
-
 function toggleSubmittedList() {
   const list = document.getElementById('submitted-list');
   const open = list.classList.toggle('open');
   document.getElementById('submitted-toggle').textContent =
-    `${open ? '▾' : '▸'} Submitted (${sessionLog.length})`;
+    `${open ? '▾' : '▸'} Submitted (${sessionLog.length}) — tap any to edit`;
 }
 
-function submitItem() {
-  const actual = parseInt(document.getElementById('actual-input').value);
-  if (isNaN(actual) || actual < 0) { document.getElementById('actual-input').focus(); return; }
+// ── Edit any previously submitted item — no longer limited to "the one before" ─
+function editItem(partId) {
+  const entry = sessionLog.find(r => r.partId === partId);
+  const item  = sessionItems.find(i => i.partId === partId);
+  if (!entry || !item) return;
 
-  if (editingPrev) { updatePrevItem(actual); return; }
+  editingPartId = partId;
+  document.getElementById('item-name').textContent = item.name;
+  document.getElementById('item-pn').textContent   = `# ${item.partNumber}`;
+  document.getElementById('item-exp').textContent  = item.expectedQty;
+  document.getElementById('actual-input').value    = entry.actual;
+  document.getElementById('submit-btn').textContent = 'Save Edit →';
+  document.getElementById('submit-btn').disabled = false;
+  hideReasonPanel(); hideSubmitError();
+  document.getElementById('item-card').classList.toggle('mismatch', entry.delta !== 0);
 
-  const item  = sessionItems[currentIdx];
-  const delta = actual - item.expectedQty;
-  sessionLog.push({ ...item, actual, delta });
-  sendItem(item, actual);
+  if (entry.delta !== 0) {
+    showReasonPanel();
+    const cc = causeCodes.find(c => c.id === entry.causeCodeId);
+    if (cc) {
+      document.getElementById('reason-select').value = cc.id;
+      renderReasonDetail(cc.code);
+    }
+    document.getElementById('submit-btn').disabled = false;
+  }
 
-  currentIdx++;
-  saveSessionState();
-  currentIdx < sessionItems.length ? renderItem() : showComplete();
-}
-
-function sendItem(item, actual) {
-  const url = `${GAS_URL}?action=submit&van=${enc(selectedVan)}&tech=${enc(techName)}` +
-    `&partNumber=${enc(item.partNumber)}&name=${enc(item.name)}` +
-    `&expectedQty=${item.expectedQty}&actualQty=${actual}&subId=${makeSubId()}`;
-  sendOrQueue(url);
+  updateNavLink();
+  show('item-screen');
+  setTimeout(() => document.getElementById('actual-input').focus(), 150);
 }
 
 // ── Session complete ──────────────────────────────────────────────────────────
@@ -517,44 +619,35 @@ function showComplete() {
     `${sessionLog.length} items · ${bad.length} discrepanc${bad.length === 1 ? 'y' : 'ies'}`;
   document.getElementById('disc-list').innerHTML =
     (bad.length === 0 ? '<div class="all-ok">✓ All items match</div>' : '') +
-    sessionLog.map(r => `<div class="disc-row" onclick="editItem('${r.partNumber}')">
+    sessionLog.map(r => `<div class="disc-row" onclick="editFromComplete('${r.partId}')">
         <span>${r.name}</span>
         <span class="${r.delta < 0 ? 'd-bad' : r.delta > 0 ? 'd-ok' : 'd-match'}">${r.actual}${r.delta !== 0 ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}</span>
       </div>`).join('');
   show('complete-screen');
 }
-
-function editItem(partNumber) {
-  const entry = sessionLog.find(r => r.partNumber === partNumber);
-  if (!entry) return;
-
-  const input = prompt(`Re-enter count for ${entry.name} (expected ${entry.expectedQty}):`, entry.actual);
-  if (input === null) return;
-  const actual = parseInt(input);
-  if (isNaN(actual) || actual < 0) return;
-
-  entry.actual = actual;
-  entry.delta  = actual - entry.expectedQty;
-  sendItem(entry, actual);
-  saveSessionState();
-  showComplete();
-}
+function editFromComplete(partId) { editItem(partId); }
 
 async function endSession() {
-  const url = `${GAS_URL}?action=completeSession&van=${enc(selectedVan)}` +
-    `&tech=${enc(techName)}&log=${enc(JSON.stringify(sessionLog))}`;
-  await sendOrQueue(url);
+  const btn = document.getElementById('end-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const { error } = await sb.from('audit_sessions')
+      .update({ completed_at: new Date().toISOString(), status: 'completed' }).eq('id', sessionId);
+    if (error) throw error;
+  } catch (err) {
+    enqueueSessionComplete(sessionId);
+  }
 
-  clearSessionState();
-  selectedVan = '';
+  selectedTechId = ''; selectedVanId = ''; sessionId = ''; sessionItems = []; sessionLog = [];
   document.getElementById('header-right').style.display = 'none';
-  document.getElementById('start-btn').disabled    = true;
-  document.getElementById('start-btn').textContent = 'Load Today\'s Audit →';
-  document.getElementById('van-select').value      = '';
-  show('van-screen');
+  document.getElementById('tech-select').value = '';
+  document.getElementById('van-select').value = '';
+  document.getElementById('start-btn').disabled = true;
+  btn.disabled = false; btn.textContent = 'End Session';
+  show('start-screen');
 }
 
-// ── Barcode scan ──────────────────────────────────────────────────────────────
+// ── Barcode scan — identifies the bin; the count is always typed by hand ─────
 function toggleScan() { scanOpen ? closeScan() : openScan(); }
 
 function openScan() {
@@ -566,44 +659,32 @@ function openScan() {
     if (result) verifyBarcode(result.getText());
   });
 }
-
 function closeScan() {
   scanOpen = false;
   if (codeReader) { try { codeReader.reset(); } catch (_) {} codeReader = null; }
   document.getElementById('scan-area').classList.remove('open');
-  const sb = document.getElementById('scan-btn');
-  if (sb) sb.textContent = 'Scan Bin';
+  const sb2 = document.getElementById('scan-btn');
+  if (sb2) sb2.textContent = 'Scan Bin';
 }
 
 function verifyBarcode(scanned) {
   closeScan();
-  const current = editingPrev ? sessionItems[currentIdx - 1] : sessionItems[currentIdx];
+  const current = editingPartId ? sessionItems.find(i => i.partId === editingPartId) : sessionItems[currentIdx];
   const el = document.getElementById('scan-result');
   el.style.display = 'block';
 
   if (scanned === current.partNumber) {
-    el.className = 'sr-ok';
-    el.textContent = `✓ Correct bin`;
+    el.className = 'sr-ok'; el.textContent = '✓ Correct bin';
     document.getElementById('actual-input').focus();
     return;
   }
 
-  // Scanned the item you just did — jump back to fix it instead of a dead-end "wrong bin".
-  if (!editingPrev && currentIdx > 0 && sessionItems[currentIdx - 1].partNumber === scanned) {
-    goBack();
-    return;
-  }
-
-  // Not the prompted item — but it might be an upcoming item in this week's set.
-  // Only matches items still ahead (i > currentIdx): swapping in an already-submitted
-  // item here would silently drop whatever it displaced, since currentIdx never rewinds.
-  if (!editingPrev) {
+  if (!editingPartId) {
     const matchIdx = sessionItems.findIndex((it, i) => i > currentIdx && it.partNumber === scanned);
     if (matchIdx !== -1) {
       const matched = sessionItems[matchIdx];
       const switchToIt = confirm(
-        `Scanned "${matched.name}" (#${matched.partNumber}) — part of this week's audit, ` +
-        `but not the item you're currently counting.\n\n` +
+        `Scanned "${matched.name}" (#${matched.partNumber}) — later in this audit, not the item you're on.\n\n` +
         `OK = switch to it now\nCancel = keep counting "${current.name}"`
       );
       if (switchToIt) {
@@ -611,74 +692,47 @@ function verifyBarcode(scanned) {
         renderItem();
         return;
       }
-      el.className = 'sr-bad';
-      el.textContent = `Continuing with ${current.name}`;
+      el.className = 'sr-bad'; el.textContent = `Continuing with ${current.name}`;
       document.getElementById('actual-input').focus();
       return;
     }
   }
 
   el.className = 'sr-bad';
-  el.textContent = `Not in this week's audit — scanned ${scanned}`;
+  el.textContent = `Not expected on this van — scanned ${scanned}`;
   document.getElementById('actual-input').focus();
 }
 
-// ── Network: send now, or queue for retry on failure ──────────────────────────
-async function sendOrQueue(url) {
-  try {
-    await fetch(url, { mode: 'no-cors' });
-  } catch {
-    enqueue(url);
-  }
-}
-
-function makeSubId() {
-  return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-}
-
-function loadQueue() {
-  try { return JSON.parse(localStorage.getItem(QUEUE_KEY)) || []; } catch { return []; }
-}
-function saveQueue(q) {
+// ── Retry queue — only for genuine network failures, never fire-and-forget ───
+// Submits themselves wait for a real server response (see submitItem). This
+// queue exists solely to retry a session-completion ping that failed while
+// offline; item submits are never silently dropped or optimistically advanced.
+function loadRetryQueue() { try { return JSON.parse(localStorage.getItem(QUEUE_KEY)) || []; } catch { return []; } }
+function saveRetryQueue(q) {
   localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
   document.getElementById('sync-badge').classList.toggle('show', q.length > 0);
   document.getElementById('sync-badge').textContent = q.length ? `${q.length} pending sync…` : '';
 }
-function enqueue(url) {
-  const q = loadQueue();
-  q.push(url);
-  saveQueue(q);
+function enqueueSessionComplete(id) {
+  const q = loadRetryQueue(); q.push({ type: 'completeSession', sessionId: id }); saveRetryQueue(q);
 }
-async function flushQueue() {
-  let q = loadQueue();
+async function flushRetryQueue() {
+  let q = loadRetryQueue();
   if (!q.length) return;
   const remaining = [];
-  for (const url of q) {
-    try { await fetch(url, { mode: 'no-cors' }); }
-    catch { remaining.push(url); }
+  for (const job of q) {
+    try {
+      if (job.type === 'completeSession') {
+        const { error } = await sb.from('audit_sessions')
+          .update({ completed_at: new Date().toISOString(), status: 'completed' }).eq('id', job.sessionId);
+        if (error) throw error;
+      }
+    } catch { remaining.push(job); }
   }
-  saveQueue(remaining);
-}
-
-// ── Session persistence (survives reload / backgrounding mid-audit) ──────────
-function saveSessionState() {
-  localStorage.setItem(SESSION_KEY, JSON.stringify({
-    van: selectedVan, tech: techName, sessionItems, currentIdx, sessionLog,
-  }));
-}
-function loadSessionState() {
-  try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch { return null; }
-}
-function clearSessionState() {
-  localStorage.removeItem(SESSION_KEY);
+  saveRetryQueue(remaining);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const enc = v => encodeURIComponent(v);
-function headerLabel() {
-  const van = selectedVan.split(' - ')[0];
-  return techName ? `${van} · ${techName}` : van;
-}
 function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
