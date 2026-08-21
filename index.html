@@ -134,6 +134,19 @@
     .nav-btns #submit-btn { flex: 2; }
     .btn-ghost:disabled { opacity: .4; cursor: default; }
 
+    /* Floating bar docked to the top of the on-screen keyboard — see
+       dockKeyboardToolbar(). Fixed positioning + inline `top` set from JS,
+       so it tracks the keyboard instead of the (unhelpful) layout viewport. */
+    .kb-toolbar {
+      display: none; position: fixed; left: 0; right: 0; z-index: 50;
+      gap: 10px; padding: 10px 16px; background: #F5F0E8;
+      border-top: 1px solid #ddd; box-shadow: 0 -4px 10px rgba(0,0,0,.08);
+    }
+    .kb-toolbar.show { display: flex; }
+    .kb-toolbar .btn { font-size: 16px; min-height: 46px; padding: 10px; }
+    .kb-toolbar #kb-last-btn { flex: 1; }
+    .kb-toolbar #kb-submit-btn { flex: 2; }
+
     /* Reason panel — only shown when a count doesn't match */
     #reason-panel {
       display: none; flex-direction: column; gap: 12px;
@@ -271,6 +284,16 @@
       </div>
     </div>
   </div>
+
+  <!-- Docked to the top edge of the on-screen keyboard via visualViewport
+       (see dockKeyboardToolbar) so Last/Next stay reachable without
+       scrolling the page behind the keyboard. Hidden until the qty field
+       is actually focused; the in-page nav-btns row is the fallback on
+       browsers without visualViewport support. -->
+  <div class="kb-toolbar" id="kb-toolbar">
+    <button class="btn btn-ghost" onclick="goLast()" id="kb-last-btn">◀ Last</button>
+    <button class="btn btn-green" onclick="submitItem()" id="kb-submit-btn">Next →</button>
+  </div>
 </div>
 
 <!-- 4: Session complete -->
@@ -337,7 +360,52 @@ const REASON_DETAIL = {
   setInterval(flushRetryQueue, 20000);
   window.addEventListener('online', flushRetryQueue);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+  mirrorSubmitButton();
+  dockKeyboardToolbar();
 })();
+
+// The floating kb-toolbar's Next button always mirrors the real #submit-btn
+// (label, disabled state, spinner) rather than duplicating every place that
+// changes it — one observer instead of touching submitItem/renderItem/etc.
+function mirrorSubmitButton() {
+  const src = document.getElementById('submit-btn');
+  const dst = document.getElementById('kb-submit-btn');
+  const sync = () => { dst.innerHTML = src.innerHTML; dst.disabled = src.disabled; };
+  sync();
+  new MutationObserver(sync).observe(src, {
+    childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['disabled'],
+  });
+}
+
+// Docks Last/Next to the top edge of the on-screen keyboard using
+// visualViewport, so they're reachable without scrolling the page behind
+// the keyboard. Falls back to the in-page nav-btns row (always visible)
+// on browsers without visualViewport support.
+function dockKeyboardToolbar() {
+  if (!window.visualViewport) return;
+  const input = document.getElementById('actual-input');
+  const bar = document.getElementById('kb-toolbar');
+  const inlineNav = document.querySelector('#item-screen .nav-btns');
+
+  function position() {
+    const vv = window.visualViewport;
+    const keyboardHeight = window.innerHeight - vv.height - vv.offsetTop;
+    const keyboardOpen = document.activeElement === input && keyboardHeight > 100;
+    if (keyboardOpen) {
+      bar.style.bottom = keyboardHeight + 'px';
+      bar.classList.add('show');
+      inlineNav.style.visibility = 'hidden';
+    } else {
+      bar.classList.remove('show');
+      inlineNav.style.visibility = '';
+    }
+  }
+  window.visualViewport.addEventListener('resize', position);
+  window.visualViewport.addEventListener('scroll', position);
+  input.addEventListener('focus', () => setTimeout(position, 50));
+  input.addEventListener('blur', () => { bar.classList.remove('show'); inlineNav.style.visibility = ''; });
+}
 
 function checkStartReady() {
   const techSel = document.getElementById('tech-select');
@@ -501,7 +569,9 @@ function renderItem() {
 }
 
 function updateNavButtons() {
-  document.getElementById('last-btn').disabled = currentIdx === 0;
+  const atStart = currentIdx === 0;
+  document.getElementById('last-btn').disabled = atStart;
+  document.getElementById('kb-last-btn').disabled = atStart;
 }
 function goLast() { if (currentIdx > 0) { currentIdx--; renderItem(); } }
 
@@ -581,7 +651,11 @@ function hideSubmitError() { document.getElementById('submit-error').style.displ
 async function submitItem() {
   const raw = document.getElementById('actual-input').value;
   const actual = parseInt(raw, 10);
-  if (raw === '' || isNaN(actual) || actual < 0) { document.getElementById('actual-input').focus(); return; }
+  if (raw === '' || isNaN(actual) || actual < 0) {
+    showSubmitError('Enter a count before continuing.');
+    document.getElementById('actual-input').focus();
+    return;
+  }
 
   const item = sessionItems[currentIdx];
   const mismatch = actual !== item.expectedQty;
