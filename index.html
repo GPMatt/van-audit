@@ -112,14 +112,34 @@
 
     #scan-area { display: none; flex-direction: column; gap: 10px; }
     #scan-area.open { display: flex; }
-    #video-wrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; }
-    #video      { width: 100%; display: block; max-height: 220px; object-fit: cover; }
+    .video-wrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; }
+    .scan-video { width: 100%; display: block; max-height: 220px; object-fit: cover; }
     .aim-line   { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
     .aim-line::before { content: ''; width: 65%; height: 2px; background: #7CB518; box-shadow: 0 0 10px #7CB518; }
-    #scan-hint { text-align: center; font-size: 14px; color: #888; }
+    #scan-hint, #teach-status { text-align: center; font-size: 14px; color: #888; }
     #scan-result { display: none; text-align: center; padding: 12px 16px; border-radius: 10px; font-weight: 700; font-size: 15px; }
     .sr-ok  { background: #d4edda; color: #155724; }
     .sr-bad { background: #f8d7da; color: #721c24; }
+
+    /* Unrecognized-barcode "link it?" prompt — only ever shown to a
+       supervisor (Jason/Matt); everyone else gets a plain sr-bad message
+       instead (see handleScan). */
+    .link-panel { display: none; flex-direction: column; gap: 10px; background: #eaf3d9; border: 2px solid #7CB518; border-radius: 12px; padding: 14px 16px; }
+    .link-panel.open { display: flex; }
+    .link-panel .lp-title { font-size: 14px; font-weight: 700; color: #3d5a0a; }
+    .link-panel .lp-actions .btn { padding: 12px; font-size: 15px; min-height: 44px; }
+    .link-search-trigger { font-size: 13px; color: #555; text-decoration: underline; cursor: pointer; text-align: center; }
+
+    /* Part search — the "not this one" fallback for live linking, and the
+       only way to pick a part in Teach Mode (no "current expected part" there). */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; align-items: flex-end; justify-content: center; }
+    .modal-overlay.open { display: flex; }
+    .modal-box { background: #F5F0E8; width: 100%; max-width: 640px; border-radius: 16px 16px 0 0; padding: 20px; display: flex; flex-direction: column; gap: 12px; max-height: 80vh; }
+    .search-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+    .search-row { background: white; border-radius: 8px; padding: 12px 14px; font-size: 15px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
+    .search-row .sr-pn { color: #888; font-size: 13px; white-space: nowrap; }
+
+    #teach-count { text-align: center; font-size: 14px; color: #666; }
 
     .item-footer { display: flex; flex-direction: column; gap: 12px; }
 
@@ -219,6 +239,9 @@
   <button class="btn btn-green" id="start-btn" disabled onclick="loadSession()">
     Load Today's Audit →
   </button>
+  <button class="btn btn-ghost" id="teach-mode-btn" style="display:none;" onclick="openTeachMode()">
+    🔧 Teach Mode — Link Barcodes
+  </button>
 </div>
 
 <!-- 2: Session overview -->
@@ -248,13 +271,14 @@
     </div>
 
     <div id="scan-area">
-      <div id="video-wrap">
-        <video id="video" autoplay muted playsinline></video>
+      <div class="video-wrap">
+        <video id="video" class="scan-video" autoplay muted playsinline></video>
         <div class="aim-line"></div>
       </div>
       <div id="scan-hint">Point camera at barcode on bin</div>
     </div>
     <div id="scan-result"></div>
+    <div id="link-panel" class="link-panel"></div>
 
     <div class="item-card" id="item-card">
       <h3 id="item-name"></h3>
@@ -306,6 +330,31 @@
   <button class="btn btn-green" id="end-btn" onclick="endSession()">End Session</button>
 </div>
 
+<!-- 5: Teach Mode — Matt only. Bulk barcode->part linking, independent of
+     any van or session: walk the warehouse/a van scanning bin after bin,
+     confirm the part each time, camera keeps running for the next one. -->
+<div class="screen" id="teach-screen">
+  <h2>Teach Mode</h2>
+  <p>Scan a barcode, then confirm which part it belongs to. The camera keeps running — scan the next bin right after.</p>
+  <div class="video-wrap">
+    <video id="teach-video" class="scan-video" autoplay muted playsinline></video>
+    <div class="aim-line"></div>
+  </div>
+  <div id="teach-status" class="info-box">Point camera at a barcode.</div>
+  <div id="teach-count"></div>
+  <button class="btn btn-ghost" onclick="closeTeachMode()">← Done, back to start</button>
+</div>
+
+<!-- Part search — "not this one" fallback for live linking, and the only
+     way to pick a part in Teach Mode. -->
+<div class="modal-overlay" id="part-search-modal">
+  <div class="modal-box">
+    <input type="text" id="part-search-input" placeholder="Search part name or #…">
+    <div id="part-search-results" class="search-list"></div>
+    <button class="btn btn-ghost" onclick="closePartSearch()">Cancel</button>
+  </div>
+</div>
+
 <script>
 // ── Fill these in from Supabase: Project Settings -> API ─────────────────────
 const SUPABASE_URL      = 'https://kyiwhqpdamrikpdttrmp.supabase.co';
@@ -325,6 +374,19 @@ let sessionLog = [];     // submitted/edited entries, keyed by partId
 let codeReader = null;
 let lastScannedCode = null, lastScannedAt = 0;
 let pendingMismatch = false;   // reason panel is open, waiting on a reason before submit
+let isSupervisor = false;      // set in loadSession() — gates the "link this barcode" prompt
+
+// Barcode -> part crosswalk (see part_barcodes). Barcodes on a shelf tag are
+// a GS1 UPC/EAN number, unrelated to part_number (the internal SKU) — this
+// map is what actually resolves a scan to a part, learned incrementally.
+let partBarcodes = {};   // barcode -> part_id
+let allParts = [];       // full catalog, for Teach Mode + the "not this one" search
+let linkTargetBarcode = null;   // barcode awaiting a live-audit link decision
+let teachTargetBarcode = null;  // barcode awaiting a Teach Mode link decision
+let searchContext = 'live';     // 'live' | 'teach' — which flow opened the part search
+let teachCodeReader = null;
+let lastTeachCode = null, lastTeachAt = 0;
+let teachLinkedCount = 0;
 
 const REASON_DETAIL = {
   not_on_wo:      ['wo_property:Property', 'wo_unit:Unit', 'wo_number:Work Order #'],
@@ -335,13 +397,16 @@ const REASON_DETAIL = {
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async function () {
   try {
-    const [t, v, c] = await Promise.all([
+    const [t, v, c, p, pb] = await Promise.all([
       sb.from('techs').select('id,name,role').eq('active', true).order('name'),
       sb.from('vans').select('id,label').eq('active', true).order('label'),
       sb.from('cause_codes').select('id,code,label').eq('active', true).order('id'),
+      sb.from('parts').select('id,part_number,name').eq('active', true).order('name'),
+      sb.from('part_barcodes').select('barcode,part_id'),
     ]);
-    if (t.error || v.error || c.error) throw (t.error || v.error || c.error);
-    techs = t.data; vans = v.data; causeCodes = c.data;
+    if (t.error || v.error || c.error || p.error || pb.error) throw (t.error || v.error || c.error || p.error || pb.error);
+    techs = t.data; vans = v.data; causeCodes = c.data; allParts = p.data;
+    partBarcodes = Object.fromEntries(pb.data.map(r => [r.barcode, r.part_id]));
 
     const techSel = document.getElementById('tech-select');
     techSel.innerHTML = '<option value="">— Select Your Name —</option>' +
@@ -351,7 +416,14 @@ const REASON_DETAIL = {
     vanSel.innerHTML = '<option value="">— Select Van —</option>' +
       vans.map(x => `<option value="${x.id}">${x.label}</option>`).join('');
 
-    [techSel, vanSel].forEach(el => el.onchange = checkStartReady);
+    // Teach Mode is Matt-only, by name — not "any supervisor" (Jason isn't
+    // shown this option even though he can link barcodes live, per project decision).
+    techSel.onchange = () => {
+      checkStartReady();
+      const t = techs.find(x => x.id === techSel.value);
+      document.getElementById('teach-mode-btn').style.display = (t && t.name === 'Matt') ? 'block' : 'none';
+    };
+    vanSel.onchange = checkStartReady;
   } catch (err) {
     showStartError('Could not load techs/vans — check connection.');
   }
@@ -434,6 +506,7 @@ async function loadSession() {
 
   const tech = techs.find(t => t.id === selectedTechId);
   sessionType = tech && tech.role === 'supervisor' ? 'jason_supervised' : 'solo';
+  isSupervisor = !!(tech && tech.role === 'supervisor');
 
   const btn = document.getElementById('start-btn');
   btn.disabled = true; btn.textContent = 'Loading…';
@@ -562,6 +635,9 @@ function renderItem() {
 
   const sr = document.getElementById('scan-result');
   sr.style.display = 'none'; sr.className = ''; sr.textContent = '';
+  const lp = document.getElementById('link-panel');
+  lp.classList.remove('open'); lp.innerHTML = '';
+  linkTargetBarcode = null;
 
   updateNavButtons();
   renderSubmittedList();
@@ -794,12 +870,19 @@ function closeScan() {
   document.getElementById('scan-area').classList.remove('open');
 }
 
+// Resolves a scan through partBarcodes (barcode -> part_id), NOT against
+// part_number directly — the barcode on a shelf tag is a GS1 UPC/EAN
+// number, unrelated to the internal SKU printed on the same tag (see
+// project notes, 2026-08-21). An unrecognized barcode gets a link prompt
+// for a supervisor, or a "go ask" message for anyone else.
 function handleScan(scanned) {
   const current = sessionItems[currentIdx];
   const el = document.getElementById('scan-result');
   el.style.display = 'block';
 
-  if (scanned === current.partNumber) {
+  const knownPartId = partBarcodes[scanned];
+
+  if (knownPartId && knownPartId === current.partId) {
     el.className = 'sr-ok'; el.textContent = '✓ Correct bin';
     document.getElementById('actual-input').focus();
     return;
@@ -809,18 +892,151 @@ function handleScan(scanned) {
   // ignore it rather than jump away silently.
   if (pendingMismatch) return;
 
-  const matchIdx = sessionItems.findIndex(it => it.partNumber === scanned);
-  if (matchIdx !== -1) {
-    const matchedName = sessionItems[matchIdx].name;
-    currentIdx = matchIdx;
-    renderItem(); // clears scan-result — reset it after
-    el.style.display = 'block'; el.className = 'sr-ok'; el.textContent = `✓ ${matchedName}`;
-    document.getElementById('actual-input').focus();
+  if (knownPartId) {
+    const matchIdx = sessionItems.findIndex(it => it.partId === knownPartId);
+    if (matchIdx !== -1) {
+      const matchedName = sessionItems[matchIdx].name;
+      currentIdx = matchIdx;
+      renderItem(); // clears scan-result — reset it after
+      el.style.display = 'block'; el.className = 'sr-ok'; el.textContent = `✓ ${matchedName}`;
+      document.getElementById('actual-input').focus();
+      return;
+    }
+    const knownPart = allParts.find(p => p.id === knownPartId);
+    el.className = 'sr-bad';
+    el.textContent = `Not expected on this van — scanned ${knownPart ? knownPart.name : 'a linked part'}`;
     return;
   }
 
-  el.className = 'sr-bad';
-  el.textContent = `Not expected on this van — scanned ${scanned}`;
+  if (isSupervisor) {
+    showLinkPrompt(scanned);
+  } else {
+    el.className = 'sr-bad';
+    el.textContent = 'Barcode not linked yet — ask Jason or Matt to link it';
+  }
+}
+
+// ── Link an unrecognized barcode (live audit — Jason/Matt only) ──────────────
+function showLinkPrompt(scanned) {
+  linkTargetBarcode = scanned;
+  const current = sessionItems[currentIdx];
+  const panel = document.getElementById('link-panel');
+  panel.classList.add('open');
+  panel.innerHTML = `
+    <div class="lp-title">Barcode not linked yet — link it to <b>${current.name}</b>?</div>
+    <div class="lp-actions"><button class="btn btn-green" onclick="confirmLink('${current.partId}')">Yes, link it</button></div>
+    <div class="link-search-trigger" onclick="openPartSearch('live')">Not this one? Search parts →</div>
+  `;
+}
+
+async function confirmLink(partId) {
+  const barcode = linkTargetBarcode;
+  if (!barcode) return;
+  document.getElementById('link-panel').classList.remove('open');
+  try {
+    const { error } = await sb.from('part_barcodes')
+      .upsert({ barcode, part_id: partId, created_by: selectedTechId }, { onConflict: 'barcode' });
+    if (error) throw error;
+    partBarcodes[barcode] = partId;
+    linkTargetBarcode = null;
+    handleScan(barcode); // now resolves — re-run to jump/confirm normally
+  } catch (err) {
+    const el = document.getElementById('scan-result');
+    el.style.display = 'block'; el.className = 'sr-bad'; el.textContent = 'Could not save link — try again.';
+  }
+}
+
+// ── Part search — "not this one" fallback for live linking, and the only
+// way to pick a part in Teach Mode. Scoped to this van's items live
+// (that's what's actually being audited); scoped to the full catalog in
+// Teach Mode (no van context there). ─────────────────────────────────────────
+function openPartSearch(context) {
+  searchContext = context;
+  const modal = document.getElementById('part-search-modal');
+  modal.classList.add('open');
+  const input = document.getElementById('part-search-input');
+  input.value = '';
+  renderPartSearchResults('');
+  input.oninput = () => renderPartSearchResults(input.value);
+  setTimeout(() => input.focus(), 50);
+}
+function closePartSearch() {
+  document.getElementById('part-search-modal').classList.remove('open');
+}
+function renderPartSearchResults(query) {
+  const list = searchContext === 'teach' ? allParts : sessionItems;
+  const q = query.trim().toLowerCase();
+  const filtered = !q ? list : list.filter(p =>
+    p.name.toLowerCase().includes(q) || String(p.partNumber ?? p.part_number).includes(q));
+  const box = document.getElementById('part-search-results');
+  box.innerHTML = filtered.slice(0, 40).map(p => {
+    const pid = p.partId ?? p.id;
+    const pn  = p.partNumber ?? p.part_number;
+    return `<div class="search-row" onclick="pickSearchedPart('${pid}')"><span>${p.name}</span><span class="sr-pn">#${pn}</span></div>`;
+  }).join('') || '<div class="sub-empty">No matches</div>';
+}
+function pickSearchedPart(partId) {
+  closePartSearch();
+  if (searchContext === 'teach') teachConfirmLink(partId);
+  else confirmLink(partId);
+}
+
+// ── Teach Mode — Matt only. Bulk barcode->part linking outside any session:
+// scan a bin, confirm the part (always via search — no "current expected
+// part" to default to here), camera keeps running for the next one. ─────────
+function openTeachMode() {
+  const techSel = document.getElementById('tech-select');
+  selectedTechId = techSel.value;
+  teachLinkedCount = 0;
+  document.getElementById('teach-status').textContent = 'Point camera at a barcode.';
+  document.getElementById('teach-count').textContent = '';
+  show('teach-screen');
+}
+function closeTeachMode() { show('start-screen'); }
+
+function openTeachScan() {
+  teachCodeReader = new ZXing.BrowserMultiFormatReader();
+  teachCodeReader.decodeFromVideoDevice(null, 'teach-video', (result) => {
+    if (!result) return;
+    const text = result.getText();
+    const now = Date.now();
+    if (text === lastTeachCode && now - lastTeachAt < 1500) return;
+    lastTeachCode = text; lastTeachAt = now;
+    handleTeachScan(text);
+  }).catch(() => {
+    document.getElementById('teach-status').textContent = 'Camera unavailable.';
+  });
+}
+function closeTeachScan() {
+  if (teachCodeReader) { try { teachCodeReader.reset(); } catch (_) {} teachCodeReader = null; }
+}
+
+function handleTeachScan(scanned) {
+  if (partBarcodes[scanned]) {
+    const part = allParts.find(p => p.id === partBarcodes[scanned]);
+    document.getElementById('teach-status').innerHTML = `<b>${part ? part.name : scanned}</b> — already linked.`;
+    return;
+  }
+  teachTargetBarcode = scanned;
+  openPartSearch('teach');
+}
+
+async function teachConfirmLink(partId) {
+  const barcode = teachTargetBarcode;
+  if (!barcode) return;
+  try {
+    const { error } = await sb.from('part_barcodes')
+      .upsert({ barcode, part_id: partId, created_by: selectedTechId }, { onConflict: 'barcode' });
+    if (error) throw error;
+    partBarcodes[barcode] = partId;
+    teachLinkedCount++;
+    const part = allParts.find(p => p.id === partId);
+    document.getElementById('teach-status').innerHTML = `✓ Linked to <b>${part ? part.name : partId}</b>`;
+    document.getElementById('teach-count').textContent = `${teachLinkedCount} linked this session`;
+  } catch (err) {
+    document.getElementById('teach-status').textContent = 'Could not save link — try again.';
+  }
+  teachTargetBarcode = null;
 }
 
 // ── Retry queue — only for genuine network failures, never fire-and-forget ───
@@ -854,13 +1070,16 @@ async function flushRetryQueue() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function show(id) {
-  const wasItemScreen = document.getElementById('item-screen').classList.contains('active');
+  const wasItemScreen  = document.getElementById('item-screen').classList.contains('active');
+  const wasTeachScreen = document.getElementById('teach-screen').classList.contains('active');
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
-  document.body.classList.toggle('audit-active', id === 'item-screen');
-  // Camera runs for the whole time the audit screen is up, not per item.
+  document.body.classList.toggle('audit-active', id === 'item-screen' || id === 'teach-screen');
+  // Camera runs for the whole time a scanning screen is up, not per item.
   if (id === 'item-screen' && !wasItemScreen) openScan();
   if (id !== 'item-screen' && wasItemScreen) closeScan();
+  if (id === 'teach-screen' && !wasTeachScreen) openTeachScan();
+  if (id !== 'teach-screen' && wasTeachScreen) closeTeachScan();
 }
 </script>
 </body>
