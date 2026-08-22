@@ -117,6 +117,18 @@
     .aim-line   { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
     .aim-line::before { content: ''; width: 65%; height: 2px; background: #7CB518; box-shadow: 0 0 10px #7CB518; }
     #scan-hint, #teach-status { text-align: center; font-size: 14px; color: #888; }
+
+    /* Real camera zoom (see initZoom/setZoom) — hidden until a device
+       actually reports a zoom capability on its video track. */
+    .zoom-ctrl {
+      display: none; position: absolute; bottom: 10px; right: 10px; z-index: 5;
+      align-items: center; gap: 8px; background: rgba(0,0,0,.55);
+      border-radius: 20px; padding: 5px 10px; color: white; font-size: 13px; font-weight: 700;
+    }
+    .zoom-ctrl button {
+      width: 28px; height: 28px; border-radius: 50%; border: none;
+      background: rgba(255,255,255,.25); color: white; font-size: 17px; font-weight: 700; cursor: pointer;
+    }
     #scan-result { display: none; text-align: center; padding: 12px 16px; border-radius: 10px; font-weight: 700; font-size: 15px; }
     .sr-ok  { background: #d4edda; color: #155724; }
     .sr-bad { background: #f8d7da; color: #721c24; }
@@ -274,6 +286,11 @@
       <div class="video-wrap">
         <video id="video" class="scan-video" autoplay muted playsinline></video>
         <div class="aim-line"></div>
+        <div class="zoom-ctrl" id="zoom-ctrl">
+          <button type="button" onclick="adjustZoom('live', -1)">－</button>
+          <span id="zoom-label">2.0x</span>
+          <button type="button" onclick="adjustZoom('live', 1)">＋</button>
+        </div>
       </div>
       <div id="scan-hint">Point camera at barcode on bin</div>
     </div>
@@ -339,6 +356,11 @@
   <div class="video-wrap">
     <video id="teach-video" class="scan-video" autoplay muted playsinline></video>
     <div class="aim-line"></div>
+    <div class="zoom-ctrl" id="teach-zoom-ctrl">
+      <button type="button" onclick="adjustZoom('teach', -1)">－</button>
+      <span id="teach-zoom-label">2.0x</span>
+      <button type="button" onclick="adjustZoom('teach', 1)">＋</button>
+    </div>
   </div>
   <div id="teach-status" class="info-box">Point camera at a barcode.</div>
   <div id="teach-count"></div>
@@ -408,9 +430,53 @@ const SCAN_CONSTRAINTS = {
     facingMode: { ideal: 'environment' },
     width:  { ideal: 1920 },
     height: { ideal: 1080 },
-    advanced: [{ focusMode: 'continuous' }],
+    // focusMode is deliberately NOT set here — it's non-standard enough on
+    // Safari that it can make the whole constraint object get rejected,
+    // silently falling all the way back to the old low-res default path.
   },
 };
+
+// Real optical/sensor zoom (iOS 17+ Safari, most recent Chrome/Android)
+// applied to the live camera track, so the barcode fills more of the frame
+// WITHOUT the phone having to get physically closer. Falls back to nothing
+// (control stays hidden) on devices that don't expose track-level zoom.
+const zoomState = {
+  live:  { videoId: 'video',       ctrlId: 'zoom-ctrl',       labelId: 'zoom-label',       caps: null, value: 2 },
+  teach: { videoId: 'teach-video', ctrlId: 'teach-zoom-ctrl', labelId: 'teach-zoom-label', caps: null, value: 2 },
+};
+async function initZoom(context) {
+  const st = zoomState[context];
+  const video = document.getElementById(st.videoId);
+  const stream = video.srcObject;
+  const track = stream && stream.getVideoTracks()[0];
+  const ctrl = document.getElementById(st.ctrlId);
+  if (!track || !track.getCapabilities) { ctrl.style.display = 'none'; return; }
+  const caps = track.getCapabilities();
+  if (!caps.zoom) { ctrl.style.display = 'none'; return; }
+  st.caps = caps;
+  await setZoom(context, Math.min(caps.max, Math.max(caps.min, 2)));
+  ctrl.style.display = 'flex';
+}
+async function setZoom(context, value) {
+  const st = zoomState[context];
+  if (!st.caps) return;
+  const video = document.getElementById(st.videoId);
+  const stream = video.srcObject;
+  const track = stream && stream.getVideoTracks()[0];
+  if (!track) return;
+  const clamped = Math.min(st.caps.max, Math.max(st.caps.min, value));
+  try {
+    await track.applyConstraints({ advanced: [{ zoom: clamped }] });
+    st.value = clamped;
+    document.getElementById(st.labelId).textContent = clamped.toFixed(1) + 'x';
+  } catch (_) {}
+}
+function adjustZoom(context, delta) {
+  const st = zoomState[context];
+  if (!st.caps) return;
+  const step = st.caps.step || 0.5;
+  setZoom(context, st.value + (delta * Math.max(step, 0.5)));
+}
 
 const REASON_DETAIL = {
   not_on_wo:      ['wo_property:Property', 'wo_unit:Unit', 'wo_number:Work Order #'],
@@ -898,6 +964,7 @@ function onLiveScanResult(result) {
 function openScan() {
   document.getElementById('scan-area').classList.add('open');
   document.getElementById('scan-hint').textContent = 'Point camera at barcode on bin';
+  document.getElementById('video').addEventListener('loadedmetadata', () => initZoom('live'), { once: true });
   codeReader = new ZXing.BrowserMultiFormatReader(SCAN_HINTS);
   codeReader.decodeFromConstraints(SCAN_CONSTRAINTS, 'video', onLiveScanResult)
     .catch(() => codeReader.decodeFromVideoDevice(null, 'video', onLiveScanResult)
@@ -906,6 +973,7 @@ function openScan() {
 function closeScan() {
   if (codeReader) { try { codeReader.reset(); } catch (_) {} codeReader = null; }
   document.getElementById('scan-area').classList.remove('open');
+  document.getElementById('zoom-ctrl').style.display = 'none';
 }
 
 // Resolves a scan through partBarcodes (barcode -> part_id), NOT against
@@ -1041,6 +1109,7 @@ function onTeachScanResult(result) {
   handleTeachScan(text);
 }
 function openTeachScan() {
+  document.getElementById('teach-video').addEventListener('loadedmetadata', () => initZoom('teach'), { once: true });
   teachCodeReader = new ZXing.BrowserMultiFormatReader(SCAN_HINTS);
   teachCodeReader.decodeFromConstraints(SCAN_CONSTRAINTS, 'teach-video', onTeachScanResult)
     .catch(() => teachCodeReader.decodeFromVideoDevice(null, 'teach-video', onTeachScanResult)
@@ -1048,6 +1117,7 @@ function openTeachScan() {
 }
 function closeTeachScan() {
   if (teachCodeReader) { try { teachCodeReader.reset(); } catch (_) {} teachCodeReader = null; }
+  document.getElementById('teach-zoom-ctrl').style.display = 'none';
 }
 
 function handleTeachScan(scanned) {
