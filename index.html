@@ -397,16 +397,13 @@ const REASON_DETAIL = {
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async function () {
   try {
-    const [t, v, c, p, pb] = await Promise.all([
+    const [t, v, c] = await Promise.all([
       sb.from('techs').select('id,name,role').eq('active', true).order('name'),
       sb.from('vans').select('id,label').eq('active', true).order('label'),
       sb.from('cause_codes').select('id,code,label').eq('active', true).order('id'),
-      sb.from('parts').select('id,part_number,name').eq('active', true).order('name'),
-      sb.from('part_barcodes').select('barcode,part_id'),
     ]);
-    if (t.error || v.error || c.error || p.error || pb.error) throw (t.error || v.error || c.error || p.error || pb.error);
-    techs = t.data; vans = v.data; causeCodes = c.data; allParts = p.data;
-    partBarcodes = Object.fromEntries(pb.data.map(r => [r.barcode, r.part_id]));
+    if (t.error || v.error || c.error) throw (t.error || v.error || c.error);
+    techs = t.data; vans = v.data; causeCodes = c.data;
 
     const techSel = document.getElementById('tech-select');
     techSel.innerHTML = '<option value="">— Select Your Name —</option>' +
@@ -426,6 +423,22 @@ const REASON_DETAIL = {
     vanSel.onchange = checkStartReady;
   } catch (err) {
     showStartError('Could not load techs/vans — check connection.');
+  }
+
+  // Best-effort — kept separate from the block above so a missing
+  // part_barcodes table (e.g. its migration hasn't been run yet) can never
+  // stall the tech/van dropdowns. Barcode scanning just falls back to
+  // "not linked" until this succeeds.
+  try {
+    const [p, pb] = await Promise.all([
+      sb.from('parts').select('id,part_number,name').eq('active', true).order('name'),
+      sb.from('part_barcodes').select('barcode,part_id'),
+    ]);
+    if (p.error || pb.error) throw (p.error || pb.error);
+    allParts = p.data;
+    partBarcodes = Object.fromEntries(pb.data.map(r => [r.barcode, r.part_id]));
+  } catch (err) {
+    console.warn('Barcode crosswalk unavailable — has migration_2026-08-21_barcodes.sql been run?', err);
   }
 
   flushRetryQueue();
