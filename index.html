@@ -388,6 +388,30 @@ let teachCodeReader = null;
 let lastTeachCode = null, lastTeachAt = 0;
 let teachLinkedCount = 0;
 
+// ZXing defaults to decodeFromVideoDevice(null, ...), which lets the browser
+// pick camera resolution — on iOS Safari that's often a low default (~640x480),
+// so a real shelf-tag barcode only has enough pixels to decode when the phone
+// is nearly touching it. Explicit constraints ask for a real rear-camera feed;
+// restricting formats to what these tags actually use (+ TRY_HARDER) keeps
+// each frame's decode fast despite the extra pixels. Falls back to the old
+// default-device behavior if a device rejects the explicit constraints.
+const SCAN_HINTS = new Map([
+  [ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+    ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
+    ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+    ZXing.BarcodeFormat.CODE_128,
+  ]],
+  [ZXing.DecodeHintType.TRY_HARDER, true],
+]);
+const SCAN_CONSTRAINTS = {
+  video: {
+    facingMode: { ideal: 'environment' },
+    width:  { ideal: 1920 },
+    height: { ideal: 1080 },
+    advanced: [{ focusMode: 'continuous' }],
+  },
+};
+
 const REASON_DETAIL = {
   not_on_wo:      ['wo_property:Property', 'wo_unit:Unit', 'wo_number:Work Order #'],
   borrowed:       ['borrowed_to:Which van or account received it?'],
@@ -863,20 +887,21 @@ async function endSession() {
 // live for the whole audit (see show()) rather than needing to be reopened
 // per item. Scanning ANY part's barcode jumps straight to it, wherever it
 // falls in the list — techs walk the van, not the app's ordering.
+function onLiveScanResult(result) {
+  if (!result) return;
+  const text = result.getText();
+  const now = Date.now();
+  if (text === lastScannedCode && now - lastScannedAt < 1500) return; // same code, still in frame
+  lastScannedCode = text; lastScannedAt = now;
+  handleScan(text);
+}
 function openScan() {
   document.getElementById('scan-area').classList.add('open');
   document.getElementById('scan-hint').textContent = 'Point camera at barcode on bin';
-  codeReader = new ZXing.BrowserMultiFormatReader();
-  codeReader.decodeFromVideoDevice(null, 'video', (result) => {
-    if (!result) return;
-    const text = result.getText();
-    const now = Date.now();
-    if (text === lastScannedCode && now - lastScannedAt < 1500) return; // same code, still in frame
-    lastScannedCode = text; lastScannedAt = now;
-    handleScan(text);
-  }).catch(() => {
-    document.getElementById('scan-hint').textContent = 'Camera unavailable — type the count manually.';
-  });
+  codeReader = new ZXing.BrowserMultiFormatReader(SCAN_HINTS);
+  codeReader.decodeFromConstraints(SCAN_CONSTRAINTS, 'video', onLiveScanResult)
+    .catch(() => codeReader.decodeFromVideoDevice(null, 'video', onLiveScanResult)
+      .catch(() => { document.getElementById('scan-hint').textContent = 'Camera unavailable — type the count manually.'; }));
 }
 function closeScan() {
   if (codeReader) { try { codeReader.reset(); } catch (_) {} codeReader = null; }
@@ -1007,18 +1032,19 @@ function openTeachMode() {
 }
 function closeTeachMode() { show('start-screen'); }
 
+function onTeachScanResult(result) {
+  if (!result) return;
+  const text = result.getText();
+  const now = Date.now();
+  if (text === lastTeachCode && now - lastTeachAt < 1500) return;
+  lastTeachCode = text; lastTeachAt = now;
+  handleTeachScan(text);
+}
 function openTeachScan() {
-  teachCodeReader = new ZXing.BrowserMultiFormatReader();
-  teachCodeReader.decodeFromVideoDevice(null, 'teach-video', (result) => {
-    if (!result) return;
-    const text = result.getText();
-    const now = Date.now();
-    if (text === lastTeachCode && now - lastTeachAt < 1500) return;
-    lastTeachCode = text; lastTeachAt = now;
-    handleTeachScan(text);
-  }).catch(() => {
-    document.getElementById('teach-status').textContent = 'Camera unavailable.';
-  });
+  teachCodeReader = new ZXing.BrowserMultiFormatReader(SCAN_HINTS);
+  teachCodeReader.decodeFromConstraints(SCAN_CONSTRAINTS, 'teach-video', onTeachScanResult)
+    .catch(() => teachCodeReader.decodeFromVideoDevice(null, 'teach-video', onTeachScanResult)
+      .catch(() => { document.getElementById('teach-status').textContent = 'Camera unavailable.'; }));
 }
 function closeTeachScan() {
   if (teachCodeReader) { try { teachCodeReader.reset(); } catch (_) {} teachCodeReader = null; }
