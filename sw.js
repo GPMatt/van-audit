@@ -1,9 +1,8 @@
-const CACHE = 'van-audit-v1';
+const CACHE = 'van-audit-v2';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js',
 ];
 
 self.addEventListener('install', e => {

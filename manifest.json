@@ -1,7 +1,7 @@
 {
   "name": "GPM Van Audit",
   "short_name": "VanAudit",
-  "description": "Scan ACE barcodes to audit GPM van inventory",
+  "description": "Walk each van bin-by-bin to audit GPM van inventory",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
