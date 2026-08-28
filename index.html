@@ -209,11 +209,6 @@
     <select id="van-select"><option value="">Loading…</option></select>
   </div>
 
-  <label style="display:flex; align-items:center; gap:10px; font-size:14px; color:#666;">
-    <input type="checkbox" id="test-session-check" style="width:18px; height:18px;">
-    Test session (won't appear in reports, safe to throw away)
-  </label>
-
   <div id="start-error" class="error-box" style="display:none;"></div>
   <button class="btn btn-green" id="start-btn" disabled onclick="loadSession()">
     Load Today's Audit →
@@ -430,7 +425,6 @@ async function loadSession() {
   selectedTechName = techSel.selectedOptions[0].textContent;
   selectedVanId    = vanSel.value;
   selectedVanLabel = vanSel.selectedOptions[0].textContent;
-  const isTest = document.getElementById('test-session-check').checked;
 
   const tech = techs.find(t => t.id === selectedTechId);
   sessionType = tech && tech.role === 'supervisor' ? 'jason_supervised' : 'solo';
@@ -490,13 +484,13 @@ async function loadSession() {
       });
     } else {
       const { data: session, error: sessErr } = await sb.from('audit_sessions')
-        .insert({ van_id: selectedVanId, tech_id: selectedTechId, session_type: sessionType, par_sync_id: parSyncId, is_test: isTest })
+        .insert({ van_id: selectedVanId, tech_id: selectedTechId, session_type: sessionType, par_sync_id: parSyncId })
         .select().single();
       if (sessErr) throw sessErr;
       sessionId = session.id;
     }
 
-    document.getElementById('header-right').textContent = `${selectedVanLabel} · ${selectedTechName}${isTest ? ' · TEST' : ''}`;
+    document.getElementById('header-right').textContent = `${selectedVanLabel} · ${selectedTechName}`;
     document.getElementById('header-right').style.display = 'block';
     document.getElementById('ov-label').textContent = sessionType === 'jason_supervised' ? `${selectedTechName}-Supervised Audit` : 'Solo Audit';
     document.getElementById('ov-name').textContent  = selectedVanLabel;
@@ -760,7 +754,6 @@ async function endSession() {
   document.getElementById('header-right').style.display = 'none';
   document.getElementById('tech-select').value = '';
   document.getElementById('van-select').value = '';
-  document.getElementById('test-session-check').checked = false;
   document.getElementById('start-btn').disabled = true;
   btn.disabled = false; btn.textContent = 'End Session';
   show('start-screen');
