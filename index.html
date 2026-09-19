@@ -86,8 +86,8 @@
 
     .item-content {
       flex: 1; overflow-y: auto;
-      padding: 20px 24px;
-      display: flex; flex-direction: column; gap: 16px;
+      padding: 10px 24px 20px;
+      display: flex; flex-direction: column; gap: 10px;
       max-width: 640px; width: 100%; margin: 0 auto; align-self: stretch;
     }
 
@@ -101,18 +101,18 @@
     .sub-row { display: flex; justify-content: space-between; align-items: center; background: white; border-radius: 8px; padding: 8px 12px; font-size: 14px; cursor: pointer; }
     .sub-empty { font-size: 13px; color: #999; text-align: center; padding: 8px; }
 
-    .item-card { background: white; border-radius: 14px; padding: 22px 20px; border-left: 5px solid #7CB518; }
+    .item-card { background: white; border-radius: 14px; padding: 14px 18px; border-left: 5px solid #7CB518; }
     .item-card.mismatch { border-left-color: #d9534f; }
+    .sku-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
     .bin-chip {
-      display: inline-block; background: #7CB518; color: white; font-weight: 800;
-      font-size: 14px; letter-spacing: .5px; border-radius: 999px; padding: 5px 14px;
-      margin-bottom: 10px;
+      display: inline-block; flex-shrink: 0; background: #7CB518; color: white; font-weight: 800;
+      font-size: 13px; letter-spacing: .5px; border-radius: 999px; padding: 4px 12px;
     }
-    .item-card h3 { font-size: clamp(18px, 3vw, 24px); font-weight: 700; line-height: 1.3; color: #1a1a1a; }
-    .item-sku { font-size: clamp(22px, 4vw, 32px); font-weight: 800; color: #111; letter-spacing: 0.5px; margin-top: 10px; }
-    .exp-row { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid #f0ebe2; }
-    .exp-lbl { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: .5px; }
-    .exp-val { font-size: clamp(40px, 8vw, 60px); font-weight: 800; color: #1a1a1a; }
+    .item-card h3 { font-size: clamp(18px, 3vw, 24px); font-weight: 700; line-height: 1.25; color: #1a1a1a; }
+    .item-sku { font-size: clamp(18px, 3.2vw, 26px); font-weight: 800; color: #111; letter-spacing: 0.5px; }
+    .exp-row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #f0ebe2; }
+    .exp-lbl { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: .5px; }
+    .exp-val { font-size: clamp(30px, 6vw, 44px); font-weight: 800; color: #1a1a1a; }
 
     .text-link { font-size: 13px; color: #555; text-decoration: underline; cursor: pointer; text-align: center; }
 
@@ -244,13 +244,14 @@
       <div class="prog-lbl" id="prog-lbl"></div>
       <div id="submitted-toggle" onclick="toggleSubmittedList()">▸ Submitted (<span id="submitted-count">0</span>) — tap any to edit</div>
       <div id="submitted-list"></div>
-      <div class="text-link" onclick="openPartSearch()">🔍 Jump to a part</div>
     </div>
 
     <div class="item-card" id="item-card">
-      <div class="bin-chip" id="item-bin"></div>
       <h3 id="item-name"></h3>
-      <div class="item-sku" id="item-pn"></div>
+      <div class="sku-row">
+        <span class="item-sku" id="item-pn"></span>
+        <span class="bin-chip" id="item-bin"></span>
+      </div>
       <div class="exp-row">
         <span class="exp-lbl">Expected</span>
         <span class="exp-val" id="item-exp"></span>
@@ -271,10 +272,12 @@
       <div id="submit-error" class="error-box" style="display:none;"></div>
 
       <div class="nav-btns">
-        <button class="btn btn-ghost" id="last-btn" onclick="goLast()">◀ Last</button>
-        <button class="btn btn-green" id="submit-btn" onclick="submitItem()">Next →</button>
+        <button class="btn btn-ghost" id="last-btn" onclick="goLast()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">◀ Last</button>
+        <button class="btn btn-green" id="submit-btn" onclick="submitItem()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">Next →</button>
       </div>
     </div>
+
+    <div class="text-link" onclick="openPartSearch()">🔍 Jump to a part</div>
   </div>
 
   <!-- Docked to the top edge of the on-screen keyboard via visualViewport
@@ -283,8 +286,8 @@
        is actually focused; the in-page nav-btns row is the fallback on
        browsers without visualViewport support. -->
   <div class="kb-toolbar" id="kb-toolbar">
-    <button class="btn btn-ghost" onclick="goLast()" id="kb-last-btn">◀ Last</button>
-    <button class="btn btn-green" onclick="submitItem()" id="kb-submit-btn">Next →</button>
+    <button class="btn btn-ghost" onclick="goLast()" id="kb-last-btn" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">◀ Last</button>
+    <button class="btn btn-green" onclick="submitItem()" id="kb-submit-btn" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">Next →</button>
   </div>
 </div>
 
