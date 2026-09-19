@@ -95,7 +95,7 @@
     .prog-fill { background: #7CB518; height: 7px; border-radius: 4px; transition: width .25s; }
     .prog-lbl  { font-size: 13px; color: #999; text-align: right; margin-top: 5px; }
 
-    #submitted-toggle { font-size: 13px; color: #7CB518; font-weight: 700; cursor: pointer; margin-top: 8px; user-select: none; }
+    #submitted-toggle { font-size: 13px; color: #7CB518; font-weight: 700; cursor: pointer; user-select: none; }
     #submitted-list { display: none; margin-top: 8px; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto; }
     #submitted-list.open { display: flex; }
     .sub-row { display: flex; justify-content: space-between; align-items: center; background: white; border-radius: 8px; padding: 8px 12px; font-size: 14px; cursor: pointer; }
@@ -130,7 +130,14 @@
     #actual-input {
       width: 100%; padding: 16px; border: 2.5px solid #7CB518; border-radius: 12px;
       font-size: clamp(32px, 6vw, 48px); font-weight: 800; text-align: center; background: white; color: #111; min-height: 78px;
+      -webkit-appearance: none; appearance: none;
     }
+    /* type=search (see index.html note) skips iOS's Previous/Next/Done
+       accessory bar above the keyboard, but brings its own chrome — strip it. */
+    #actual-input::-webkit-search-decoration,
+    #actual-input::-webkit-search-cancel-button,
+    #actual-input::-webkit-search-results-button,
+    #actual-input::-webkit-search-results-decoration { display: none; -webkit-appearance: none; }
 
     .nav-btns { display: flex; gap: 12px; }
     .nav-btns .btn { font-size: clamp(16px, 2.5vw, 20px); min-height: 62px; }
@@ -242,8 +249,6 @@
     <div>
       <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
       <div class="prog-lbl" id="prog-lbl"></div>
-      <div id="submitted-toggle" onclick="toggleSubmittedList()">▸ Submitted (<span id="submitted-count">0</span>) — tap any to edit</div>
-      <div id="submitted-list"></div>
     </div>
 
     <div class="item-card" id="item-card">
@@ -259,7 +264,11 @@
     </div>
 
     <div class="item-footer">
-      <input type="number" id="actual-input" inputmode="numeric" min="0" placeholder="Count">
+      <!-- type=search (not number/text) is what keeps iOS Safari's native
+           Previous/Next/Done accessory bar from appearing above the
+           keyboard; inputmode=numeric still gives the numeric keypad. -->
+      <input type="search" id="actual-input" inputmode="numeric" min="0" placeholder="Count"
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
 
       <div id="reason-panel">
         <div class="rp-title">Count doesn't match — why?</div>
@@ -276,6 +285,9 @@
         <button class="btn btn-green" id="submit-btn" onclick="submitItem()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">Next →</button>
       </div>
     </div>
+
+    <div id="submitted-toggle" onclick="toggleSubmittedList()">▸ Submitted (<span id="submitted-count">0</span>) — tap any to edit</div>
+    <div id="submitted-list"></div>
 
     <div class="text-link" onclick="openPartSearch()">🔍 Jump to a part</div>
   </div>
