@@ -160,16 +160,6 @@
     .kb-toolbar #kb-last-btn { flex: 1; }
     .kb-toolbar #kb-submit-btn { flex: 2; }
 
-    /* Reason panel — only shown when a count doesn't match */
-    #reason-panel {
-      display: none; flex-direction: column; gap: 12px;
-      background: #fff6e0; border: 2px solid #f4c542; border-radius: 12px; padding: 16px;
-    }
-    #reason-panel.open { display: flex; }
-    #reason-panel .rp-title { font-size: 14px; font-weight: 700; color: #7a5c00; }
-    #reason-detail { display: none; flex-direction: column; gap: 10px; }
-    #reason-detail.open { display: flex; }
-
     #complete-screen { padding-top: 32px; }
     .done-badge { background: #7CB518; color: white; border-radius: 14px; padding: 28px 24px; text-align: center; }
     .done-badge h2 { font-size: 26px; font-weight: 700; }
@@ -238,8 +228,7 @@
   </div>
   <div class="info-box">
     Every part on this van gets counted, every visit — nothing is skipped by rotation.<br>
-    Enter the actual count you find in each bin.<br>
-    Any count that doesn't match asks for a reason before it can be submitted.
+    Enter the actual count you find in each bin.
   </div>
   <button class="btn btn-green" onclick="beginAudit()">Begin →</button>
   <button class="btn btn-ghost" onclick="show('start-screen')">← Change Van / Name</button>
@@ -271,14 +260,6 @@
            keyboard; inputmode=numeric still gives the numeric keypad. -->
       <input type="search" id="actual-input" inputmode="numeric" min="0" placeholder="Count"
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-
-      <div id="reason-panel">
-        <div class="rp-title">Count doesn't match — why?</div>
-        <select id="reason-select">
-          <option value="">Select a reason…</option>
-        </select>
-        <div id="reason-detail"></div>
-      </div>
 
       <div id="submit-error" class="error-box" style="display:none;"></div>
 
@@ -335,30 +316,22 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const QUEUE_KEY = 'vanAuditRetryQueue';
 
-let techs = [], vans = [], causeCodes = [];
+let techs = [], vans = [];
 let selectedTechId = '', selectedTechName = '', selectedVanId = '', selectedVanLabel = '';
 let sessionId = '', sessionType = 'solo', parSyncId = '';
 let sessionItems = [];   // { partId, partNumber, name, binNumber, expectedQty, lineId? }
 let currentIdx = 0;
 let sessionLog = [];     // submitted/edited entries, keyed by partId
-let pendingMismatch = false;   // reason panel is open, waiting on a reason before submit
-
-const REASON_DETAIL = {
-  not_on_wo:      ['wo_property:Property', 'wo_unit:Unit', 'wo_number:Work Order #'],
-  borrowed:       ['borrowed_to:Which van or account received it?'],
-  never_received: ['expected_order_date:Date it was supposed to arrive|date'],
-};
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async function () {
   try {
-    const [t, v, c] = await Promise.all([
+    const [t, v] = await Promise.all([
       sb.from('techs').select('id,name,role').eq('active', true).order('name'),
       sb.from('vans').select('id,label').eq('active', true).order('label'),
-      sb.from('cause_codes').select('id,code,label').eq('active', true).order('id'),
     ]);
-    if (t.error || v.error || c.error) throw (t.error || v.error || c.error);
-    techs = t.data; vans = v.data; causeCodes = c.data;
+    if (t.error || v.error) throw (t.error || v.error);
+    techs = t.data; vans = v.data;
 
     const techSel = document.getElementById('tech-select');
     techSel.innerHTML = '<option value="">— Select Your Name —</option>' +
@@ -604,7 +577,6 @@ function beginAudit() {
 }
 
 function renderItem() {
-  pendingMismatch = false;
   const item = sessionItems[currentIdx];
   const pct  = (currentIdx / sessionItems.length) * 100;
   const existing = sessionLog.find(r => r.partId === item.partId);
@@ -619,23 +591,7 @@ function renderItem() {
   document.getElementById('actual-input').value    = existing ? existing.actual : '';
   document.getElementById('submit-btn').textContent = existing ? 'Save Edit →' : 'Next →';
   document.getElementById('submit-btn').disabled = false;
-  hideReasonPanel();
   hideSubmitError();
-
-  if (existing && existing.delta !== 0) {
-    showReasonPanel();
-    const cc = causeCodes.find(c => c.id === existing.causeCodeId);
-    if (cc) {
-      document.getElementById('reason-select').value = cc.id;
-      renderReasonDetail(cc.code);
-      (REASON_DETAIL[cc.code] || []).forEach(f => {
-        const key = f.split(':')[0];
-        const input = document.getElementById(`rd-${key}`);
-        if (input && existing.reasonPayload) input.value = existing.reasonPayload[key] || '';
-      });
-      checkReasonReady();
-    }
-  }
 
   updateNavButtons();
   renderSubmittedList();
@@ -659,73 +615,6 @@ function goToPart(partId) {
   renderItem();
 }
 
-// ── Reason panel — only appears when the count doesn't match ─────────────────
-function buildReasonSelect() {
-  const sel = document.getElementById('reason-select');
-  sel.innerHTML = '<option value="">Select a reason…</option>' +
-    causeCodes.map(c => `<option value="${c.id}" data-code="${c.code}">${c.label}</option>`).join('');
-  sel.onchange = () => {
-    const code = sel.selectedOptions[0]?.dataset.code;
-    renderReasonDetail(code);
-    // Five of the eight causes (lost, broken, personal use, GPM use,
-    // misplaced — the common "it's just not there" cases) need no
-    // follow-up fields, so there's nothing left to enter: submit right
-    // on selection instead of making the tech tap Confirm & Submit again.
-    // Causes with follow-up fields (not_on_wo, borrowed, never_received)
-    // still need that explicit tap once the fields are filled in.
-    // This only runs from a real tap on the dropdown, never from the
-    // programmatic prefill in renderItem() when reopening an already-
-    // submitted line to edit it.
-    if (code && !REASON_DETAIL[code]) submitItem();
-  };
-}
-
-function renderReasonDetail(code) {
-  const wrap = document.getElementById('reason-detail');
-  const fields = REASON_DETAIL[code];
-  if (!fields) { wrap.classList.remove('open'); wrap.innerHTML = ''; checkReasonReady(); return; }
-
-  wrap.innerHTML = fields.map(f => {
-    const [key, rest] = f.split(':');
-    const [labelPart, type] = rest.split('|');
-    const inputType = type === 'date' ? 'date' : 'text';
-    return `<div class="field-group"><label class="field-label">${labelPart}</label>
-      <input type="${inputType}" id="rd-${key}" data-key="${key}" oninput="checkReasonReady()"></div>`;
-  }).join('');
-  wrap.classList.add('open');
-  checkReasonReady();
-}
-
-function checkReasonReady() {
-  const reasonId = document.getElementById('reason-select').value;
-  const detailInputs = [...document.querySelectorAll('#reason-detail input')];
-  const detailFilled = detailInputs.every(i => i.value.trim());
-  document.getElementById('submit-btn').disabled = !(reasonId && detailFilled);
-}
-
-function showReasonPanel() {
-  buildReasonSelect();
-  document.getElementById('reason-panel').classList.add('open');
-  document.getElementById('item-card').classList.add('mismatch');
-  document.getElementById('submit-btn').textContent = 'Confirm & Submit →';
-  document.getElementById('submit-btn').disabled = true;
-  pendingMismatch = true;
-}
-function hideReasonPanel() {
-  document.getElementById('reason-panel').classList.remove('open');
-  document.getElementById('reason-detail').classList.remove('open');
-  document.getElementById('reason-detail').innerHTML = '';
-  document.getElementById('reason-select').value = '';
-  pendingMismatch = false;
-}
-
-function collectReasonPayload() {
-  const causeCodeId = document.getElementById('reason-select').value || null;
-  const payload = { cause_code_id: causeCodeId };
-  document.querySelectorAll('#reason-detail input').forEach(i => { payload[i.dataset.key] = i.value.trim(); });
-  return payload;
-}
-
 function showSubmitError(msg) {
   const el = document.getElementById('submit-error');
   el.textContent = msg; el.style.display = 'block';
@@ -745,10 +634,6 @@ async function submitItem() {
   }
 
   const item = sessionItems[currentIdx];
-  const mismatch = actual !== item.expectedQty;
-
-  if (mismatch && !pendingMismatch) { showReasonPanel(); return; }
-  if (mismatch && pendingMismatch && document.getElementById('submit-btn').disabled) return;
 
   const btn = document.getElementById('submit-btn');
   btn.disabled = true;
@@ -756,7 +641,12 @@ async function submitItem() {
   btn.innerHTML = '<span class="spinner"></span>';
   hideSubmitError();
 
-  const reasonPayload = mismatch ? collectReasonPayload() : { cause_code_id: null };
+  // A mismatch used to require picking a cause code before this could go
+  // through — Matt's call 2026-09-21: no prompt at all, ever, submit
+  // exactly like a matching count. cause_code_id is always null going
+  // forward; see migration_2026-09-21_drop_cause_requirement.sql for the
+  // DB side (the old cause_required_on_discrepancy check is gone too).
+  const reasonPayload = { cause_code_id: null };
   const existing = sessionLog.find(r => r.partId === item.partId);
 
   try {
