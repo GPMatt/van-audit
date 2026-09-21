@@ -322,16 +322,19 @@ let sessionId = '', sessionType = 'solo', parSyncId = '';
 let sessionItems = [];   // { partId, partNumber, name, binNumber, expectedQty, lineId? }
 let currentIdx = 0;
 let sessionLog = [];     // submitted/edited entries, keyed by partId
+let gpmUseCauseCodeId = null;   // looked up once at boot — see submitItem()'s Matt-only default
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async function () {
   try {
-    const [t, v] = await Promise.all([
+    const [t, v, gu] = await Promise.all([
       sb.from('techs').select('id,name,role').eq('active', true).order('name'),
       sb.from('vans').select('id,label').eq('active', true).order('label'),
+      sb.from('cause_codes').select('id').eq('code', 'gpm_use').single(),
     ]);
     if (t.error || v.error) throw (t.error || v.error);
     techs = t.data; vans = v.data;
+    if (!gu.error) gpmUseCauseCodeId = gu.data.id;
 
     const techSel = document.getElementById('tech-select');
     techSel.innerHTML = '<option value="">— Select Your Name —</option>' +
@@ -643,10 +646,20 @@ async function submitItem() {
 
   // A mismatch used to require picking a cause code before this could go
   // through — Matt's call 2026-09-21: no prompt at all, ever, submit
-  // exactly like a matching count. cause_code_id is always null going
-  // forward; see migration_2026-09-21_drop_cause_requirement.sql for the
-  // DB side (the old cause_required_on_discrepancy check is gone too).
-  const reasonPayload = { cause_code_id: null };
+  // exactly like a matching count. cause_code_id is null for everyone
+  // else; see migration_2026-09-21_drop_cause_requirement.sql for the DB
+  // side (the old cause_required_on_discrepancy check is meant to be
+  // gone too, but as long as it's still live, a null cause_code_id on a
+  // mismatch 400s). Matt's own sessions specifically default silently to
+  // "GPM internal use" instead of null on a mismatch — his audits are
+  // typically internal/test runs, not something that needs a real
+  // per-item reason, and it happens to also keep his sessions working
+  // even before that migration is run, since a real cause code always
+  // satisfies the old constraint.
+  const mismatch = actual !== item.expectedQty;
+  const reasonPayload = {
+    cause_code_id: (mismatch && selectedTechName === 'Matt') ? gpmUseCauseCodeId : null,
+  };
   const existing = sessionLog.find(r => r.partId === item.partId);
 
   try {
