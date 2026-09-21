@@ -48,6 +48,8 @@
       width: 100%; border: none; border-radius: 12px;
       font-size: 18px; font-weight: 700; cursor: pointer;
       padding: 18px; min-height: 58px;
+      touch-action: manipulation; -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
     }
     .btn-green          { background: #7CB518; color: white; }
     .btn-green:disabled { background: #bbb; cursor: default; }
@@ -388,34 +390,48 @@ const REASON_DETAIL = {
 
 // Last/Next must not blur #actual-input on tap (that closes the keyboard),
 // and must not depend on the browser's synthesized `click` after
-// touchstart.preventDefault() — that suppression is real but inconsistent
-// across iOS/Android versions (confirmed: taps did nothing on several
-// phones, some of them Safari), so relying on it silently drops taps on
-// devices it wasn't tested on. touchend's preventDefault reliably cancels
-// the trailing click everywhere, so the action fires from there instead;
-// click stays wired only as the mouse/keyboard fallback. A move-past-
-// threshold on touchmove treats the gesture as a scroll, not a tap, since
-// the inline nav-btns row lives inside the scrollable item-content.
+// touchstart.preventDefault() — that suppression is real but has shifted
+// across WebKit versions over the years, and a touchstart/touchend-only
+// version of this still went dead-silent on some older phones. Pointer
+// Events unify mouse/touch/pen into one event model (consistently
+// supported since iOS 13 / long-standing on Android Chrome) instead of
+// hand-reconciling touch vs. mouse vs. click compatibility events, so the
+// action fires from pointerup directly rather than from any synthesized
+// event. click is kept only as a last-resort fallback for a browser with
+// no Pointer Events support at all. A move-past-threshold on pointermove
+// treats the gesture as a scroll, not a tap, since the inline nav-btns row
+// lives inside the scrollable item-content.
 function bindTap(el, handler) {
-  let tracking = false, moved = false, sx = 0, sy = 0;
-  el.addEventListener('mousedown', e => e.preventDefault());
-  el.addEventListener('touchstart', e => {
-    e.preventDefault();
-    tracking = true; moved = false;
-    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-  }, { passive: false });
-  el.addEventListener('touchmove', e => {
-    if (!tracking) return;
-    if (Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) moved = true;
-  }, { passive: true });
-  el.addEventListener('touchend', e => {
-    if (!tracking) return;
-    tracking = false;
-    if (moved) return;
-    e.preventDefault();
+  let tracking = false, moved = false, sx = 0, sy = 0, firedByPointer = false;
+
+  if (window.PointerEvent) {
+    el.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      tracking = true; moved = false; sx = e.clientX; sy = e.clientY;
+      e.preventDefault();
+    });
+    el.addEventListener('pointermove', e => {
+      if (!tracking) return;
+      if (Math.hypot(e.clientX - sx, e.clientY - sy) > 10) moved = true;
+    });
+    el.addEventListener('pointerup', e => {
+      if (!tracking) return;
+      tracking = false;
+      if (moved) return;
+      e.preventDefault();
+      firedByPointer = true;
+      if (!el.disabled) handler();
+    });
+    el.addEventListener('pointercancel', () => { tracking = false; });
+  }
+
+  // Fires normally on a browser with no Pointer Events support. On one that
+  // does support them, firedByPointer swallows the one redundant click that
+  // still trails a pointer tap there, so the action never runs twice.
+  el.addEventListener('click', () => {
+    if (firedByPointer) { firedByPointer = false; return; }
     if (!el.disabled) handler();
   });
-  el.addEventListener('click', () => { if (!el.disabled) handler(); });
 }
 
 // The floating kb-toolbar's Next button always mirrors the real #submit-btn
