@@ -648,7 +648,20 @@ function buildReasonSelect() {
   const sel = document.getElementById('reason-select');
   sel.innerHTML = '<option value="">Select a reason…</option>' +
     causeCodes.map(c => `<option value="${c.id}" data-code="${c.code}">${c.label}</option>`).join('');
-  sel.onchange = () => renderReasonDetail(sel.selectedOptions[0]?.dataset.code);
+  sel.onchange = () => {
+    const code = sel.selectedOptions[0]?.dataset.code;
+    renderReasonDetail(code);
+    // Five of the eight causes (lost, broken, personal use, GPM use,
+    // misplaced — the common "it's just not there" cases) need no
+    // follow-up fields, so there's nothing left to enter: submit right
+    // on selection instead of making the tech tap Confirm & Submit again.
+    // Causes with follow-up fields (not_on_wo, borrowed, never_received)
+    // still need that explicit tap once the fields are filled in.
+    // This only runs from a real tap on the dropdown, never from the
+    // programmatic prefill in renderItem() when reopening an already-
+    // submitted line to edit it.
+    if (code && !REASON_DETAIL[code]) submitItem();
+  };
 }
 
 function renderReasonDetail(code) {
