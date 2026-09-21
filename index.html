@@ -281,8 +281,8 @@
       <div id="submit-error" class="error-box" style="display:none;"></div>
 
       <div class="nav-btns">
-        <button class="btn btn-ghost" id="last-btn" onclick="goLast()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">◀ Last</button>
-        <button class="btn btn-green" id="submit-btn" onclick="submitItem()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">Next →</button>
+        <button class="btn btn-ghost" id="last-btn">◀ Last</button>
+        <button class="btn btn-green" id="submit-btn">Next →</button>
       </div>
     </div>
 
@@ -298,8 +298,8 @@
        is actually focused; the in-page nav-btns row is the fallback on
        browsers without visualViewport support. -->
   <div class="kb-toolbar" id="kb-toolbar">
-    <button class="btn btn-ghost" onclick="goLast()" id="kb-last-btn" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">◀ Last</button>
-    <button class="btn btn-green" onclick="submitItem()" id="kb-submit-btn" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()">Next →</button>
+    <button class="btn btn-ghost" id="kb-last-btn">◀ Last</button>
+    <button class="btn btn-green" id="kb-submit-btn">Next →</button>
   </div>
 </div>
 
@@ -377,9 +377,46 @@ const REASON_DETAIL = {
   window.addEventListener('online', flushRetryQueue);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
+  bindTap(document.getElementById('last-btn'), goLast);
+  bindTap(document.getElementById('submit-btn'), submitItem);
+  bindTap(document.getElementById('kb-last-btn'), goLast);
+  bindTap(document.getElementById('kb-submit-btn'), submitItem);
+
   mirrorSubmitButton();
   dockKeyboardToolbar();
 })();
+
+// Last/Next must not blur #actual-input on tap (that closes the keyboard),
+// and must not depend on the browser's synthesized `click` after
+// touchstart.preventDefault() — that suppression is real but inconsistent
+// across iOS/Android versions (confirmed: taps did nothing on several
+// phones, some of them Safari), so relying on it silently drops taps on
+// devices it wasn't tested on. touchend's preventDefault reliably cancels
+// the trailing click everywhere, so the action fires from there instead;
+// click stays wired only as the mouse/keyboard fallback. A move-past-
+// threshold on touchmove treats the gesture as a scroll, not a tap, since
+// the inline nav-btns row lives inside the scrollable item-content.
+function bindTap(el, handler) {
+  let tracking = false, moved = false, sx = 0, sy = 0;
+  el.addEventListener('mousedown', e => e.preventDefault());
+  el.addEventListener('touchstart', e => {
+    e.preventDefault();
+    tracking = true; moved = false;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+  }, { passive: false });
+  el.addEventListener('touchmove', e => {
+    if (!tracking) return;
+    if (Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) moved = true;
+  }, { passive: true });
+  el.addEventListener('touchend', e => {
+    if (!tracking) return;
+    tracking = false;
+    if (moved) return;
+    e.preventDefault();
+    if (!el.disabled) handler();
+  });
+  el.addEventListener('click', () => { if (!el.disabled) handler(); });
+}
 
 // The floating kb-toolbar's Next button always mirrors the real #submit-btn
 // (label, disabled state, spinner) rather than duplicating every place that
