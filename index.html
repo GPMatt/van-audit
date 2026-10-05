@@ -104,7 +104,6 @@
     .sub-empty { font-size: 13px; color: #999; text-align: center; padding: 8px; }
 
     .item-card { background: white; border-radius: 14px; padding: 14px 18px; border-left: 5px solid #7CB518; }
-    .item-card.mismatch { border-left-color: #d9534f; }
     .sku-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
     .bin-chip {
       display: inline-block; flex-shrink: 0; background: #7CB518; color: white; font-weight: 800;
@@ -112,9 +111,6 @@
     }
     .item-card h3 { font-size: clamp(18px, 3vw, 24px); font-weight: 700; line-height: 1.25; color: #1a1a1a; }
     .item-sku { font-size: clamp(18px, 3.2vw, 26px); font-weight: 800; color: #111; letter-spacing: 0.5px; }
-    .exp-row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #f0ebe2; }
-    .exp-lbl { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: .5px; }
-    .exp-val { font-size: clamp(30px, 6vw, 44px); font-weight: 800; color: #1a1a1a; }
 
     .text-link { font-size: 13px; color: #555; text-decoration: underline; cursor: pointer; text-align: center; }
 
@@ -165,10 +161,7 @@
     .done-badge h2 { font-size: 26px; font-weight: 700; }
     .done-badge p  { font-size: 15px; opacity: .85; margin-top: 8px; }
     .disc-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: white; border-radius: 10px; font-size: 15px; cursor: pointer; }
-    .disc-row .d-ok    { color: #2d7a06; font-weight: 700; }
-    .disc-row .d-bad   { color: #a00;    font-weight: 700; }
     .disc-row .d-match { color: #999;    font-weight: 700; }
-    .all-ok { text-align: center; color: #2d7a06; font-weight: 700; padding: 22px; font-size: 17px; }
 
     .spinner {
       display: inline-block; width: 18px; height: 18px; border: 3px solid rgba(255,255,255,.4);
@@ -247,10 +240,6 @@
       <div class="sku-row">
         <span class="item-sku" id="item-pn"></span>
         <span class="bin-chip" id="item-bin"></span>
-      </div>
-      <div class="exp-row">
-        <span class="exp-lbl">Expected</span>
-        <span class="exp-val" id="item-exp"></span>
       </div>
     </div>
 
@@ -589,8 +578,6 @@ function renderItem() {
   document.getElementById('item-bin').textContent  = item.binNumber != null ? `BIN ${item.binNumber}` : 'BIN —';
   document.getElementById('item-name').textContent = item.name;
   document.getElementById('item-pn').textContent   = `# ${item.partNumber}`;
-  document.getElementById('item-exp').textContent  = item.expectedQty;
-  document.getElementById('item-card').classList.toggle('mismatch', !!existing && existing.delta !== 0);
   document.getElementById('actual-input').value    = existing ? existing.actual : '';
   document.getElementById('submit-btn').textContent = existing ? 'Save Edit →' : 'Next →';
   document.getElementById('submit-btn').disabled = false;
@@ -713,7 +700,7 @@ function renderSubmittedList() {
   document.getElementById('submitted-list').innerHTML = sessionLog.length
     ? sessionLog.map(r => `<div class="sub-row" onclick="goToPart('${r.partId}')">
         <span>${r.name}</span>
-        <span class="${r.delta < 0 ? 'd-bad' : r.delta > 0 ? 'd-ok' : ''}">${r.actual}${r.delta !== 0 ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}</span>
+        <span>${r.actual}</span>
       </div>`).join('')
     : '<div class="sub-empty">None yet</div>';
 }
@@ -725,15 +712,15 @@ function toggleSubmittedList() {
 }
 
 // ── Session complete ──────────────────────────────────────────────────────────
+// Blind count: the expected quantity is never shown to the auditor, and that
+// includes anything it could be worked back from (a +/- delta, a red
+// "mismatch" marker, a discrepancy total). Counts only, here and everywhere.
 function showComplete() {
-  const bad = sessionLog.filter(r => r.delta !== 0);
-  document.getElementById('done-summary').textContent =
-    `${sessionLog.length} items · ${bad.length} discrepanc${bad.length === 1 ? 'y' : 'ies'}`;
+  document.getElementById('done-summary').textContent = `${sessionLog.length} items counted`;
   document.getElementById('disc-list').innerHTML =
-    (bad.length === 0 ? '<div class="all-ok">✓ All items match</div>' : '') +
     sessionLog.map(r => `<div class="disc-row" onclick="goToPart('${r.partId}')">
         <span>${r.name}</span>
-        <span class="${r.delta < 0 ? 'd-bad' : r.delta > 0 ? 'd-ok' : 'd-match'}">${r.actual}${r.delta !== 0 ? ` (${r.delta > 0 ? '+' : ''}${r.delta})` : ''}</span>
+        <span class="d-match">${r.actual}</span>
       </div>`).join('');
   show('complete-screen');
 }
