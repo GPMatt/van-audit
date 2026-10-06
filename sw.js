@@ -1,4 +1,4 @@
-const CACHE = 'van-audit-v5';
+const CACHE = 'van-audit-v6';
 const ASSETS = [
   './',
   './index.html',

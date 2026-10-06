@@ -215,7 +215,7 @@
     Every part on this van gets counted, every visit — nothing is skipped by rotation.<br>
     Enter the actual count you find in each bin.
   </div>
-  <button class="btn btn-green" onclick="beginAudit()">Begin →</button>
+  <button class="btn btn-green" id="begin-btn" onclick="beginAudit()">Begin →</button>
   <button class="btn btn-amber" id="ov-restart-btn" style="display:none;" onclick="openRestartConfirm()">↺ Restart This Audit</button>
   <button class="btn btn-ghost" onclick="show('start-screen')">← Change Van / Name</button>
 </div>
@@ -257,7 +257,7 @@
     <div id="submitted-list"></div>
 
     <div class="text-link" onclick="openPartSearch()">🔍 Jump to a part</div>
-    <div class="text-link" onclick="openRestartConfirm()">↺ Restart this audit</div>
+    <div class="text-link restart-link" onclick="openRestartConfirm()">↺ Restart this audit</div>
   </div>
 </div>
 
@@ -269,7 +269,7 @@
   </div>
   <div id="disc-list"></div>
   <button class="btn btn-green" id="end-btn" onclick="endSession()">End Session</button>
-  <div class="text-link" onclick="openRestartConfirm()">↺ Restart this audit</div>
+  <div class="text-link restart-link" onclick="openRestartConfirm()">↺ Restart this audit</div>
 </div>
 
 <!-- Part search — manual "jump to a part", for when the physical walk
@@ -310,6 +310,16 @@ let sessionId = '', sessionType = 'solo', parSyncId = '';
 let sessionItems = [];   // { partId, partNumber, name, binNumber, expectedQty, lineId? }
 let currentIdx = 0;
 let sessionLog = [];     // submitted/edited entries, keyed by partId
+// Matt-only practice van (seeded by the Monday sync with a short parts list).
+// Its audits are stored as 'abandoned' even when finished, so they can never
+// reach a report — both report views only read 'completed' sessions.
+const TEST_VAN_LABEL = 'Test Van';
+const TEST_VAN_TECH  = 'Matt';
+let isTestVan = false;
+// True when the van's audit for this baseline is already finished and has
+// been reopened to correct counts. A finished audit is never replaced by a
+// second one — it can only be corrected, with every change logged.
+let correctionMode = false;
 let gpmUseCauseCodeId = null;   // looked up once at boot — see submitItem()'s Matt-only default
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
@@ -329,10 +339,9 @@ let gpmUseCauseCodeId = null;   // looked up once at boot — see submitItem()'s
       techs.map(x => `<option value="${x.id}">${x.name}</option>`).join('');
 
     const vanSel = document.getElementById('van-select');
-    vanSel.innerHTML = '<option value="">— Select Van —</option>' +
-      vans.map(x => `<option value="${x.id}">${x.label}</option>`).join('');
+    renderVanOptions();
 
-    techSel.onchange = checkStartReady;
+    techSel.onchange = () => { renderVanOptions(); checkStartReady(); };
     vanSel.onchange = checkStartReady;
   } catch (err) {
     showStartError('Could not load techs/vans — check connection.');
@@ -393,6 +402,21 @@ function bindTap(el, handler) {
   });
 }
 
+// The Test Van is only offered when Matt's name is picked, so a tech can't
+// land on it by accident and have a real count go nowhere.
+function renderVanOptions() {
+  const techSel = document.getElementById('tech-select');
+  const vanSel  = document.getElementById('van-select');
+  const techName = techSel.value ? techSel.selectedOptions[0].textContent : '';
+  const keep = vanSel.value;
+  const shown = vans
+    .filter(v => v.label !== TEST_VAN_LABEL || techName === TEST_VAN_TECH)
+    .sort((a, b) => (a.label === TEST_VAN_LABEL) - (b.label === TEST_VAN_LABEL));
+  vanSel.innerHTML = '<option value="">— Select Van —</option>' +
+    shown.map(x => `<option value="${x.id}">${x.label}</option>`).join('');
+  if (shown.some(v => v.id === keep)) vanSel.value = keep;
+}
+
 function checkStartReady() {
   const techSel = document.getElementById('tech-select');
   const vanSel  = document.getElementById('van-select');
@@ -431,6 +455,18 @@ async function findOpenSession() {
   return data[0] || null;
 }
 
+// The finished audit for this van + baseline, if there is one. On the Test
+// Van "finished" is stored as abandoned-with-a-completed_at (see above).
+async function findFinishedSession() {
+  const { data, error } = await sb.from('audit_sessions')
+    .select('id, tech_id, session_type, completed_at').eq('van_id', selectedVanId)
+    .eq('par_sync_id', parSyncId).eq('status', isTestVan ? 'abandoned' : 'completed')
+    .not('completed_at', 'is', null)
+    .order('completed_at', { ascending: false }).limit(1);
+  if (error) throw error;
+  return data[0] || null;
+}
+
 async function createSession() {
   return sb.from('audit_sessions')
     .insert({ van_id: selectedVanId, tech_id: selectedTechId, session_type: sessionType, par_sync_id: parSyncId })
@@ -464,6 +500,8 @@ async function loadSession() {
   selectedTechName = techSel.selectedOptions[0].textContent;
   selectedVanId    = vanSel.value;
   selectedVanLabel = vanSel.selectedOptions[0].textContent;
+  isTestVan = selectedVanLabel === TEST_VAN_LABEL;
+  correctionMode = false;
 
   const tech = techs.find(t => t.id === selectedTechId);
   sessionType = tech && tech.role === 'supervisor' ? 'jason_supervised' : 'solo';
@@ -504,6 +542,12 @@ async function loadSession() {
 
     let open = await findOpenSession();
     if (!open) {
+      // Already finished for this baseline? Reopen it for corrections rather
+      // than start a second audit that would sit alongside the first.
+      open = await findFinishedSession();
+      if (open) correctionMode = true;
+    }
+    if (!open) {
       const { data: session, error: sessErr } = await createSession();
       // 23505 = another phone opened this van a moment ago (one-open-
       // session-per-van index) — join theirs instead of failing.
@@ -515,21 +559,37 @@ async function loadSession() {
     sessionId = open.id;
 
     // A supervisor joining a tech's solo audit makes it a supervised one.
-    if (sessionType === 'jason_supervised' && open.session_type !== 'jason_supervised') {
+    if (!correctionMode && sessionType === 'jason_supervised' && open.session_type !== 'jason_supervised') {
       await sb.from('audit_sessions').update({ session_type: 'jason_supervised' }).eq('id', sessionId);
     }
-    const starter = open.tech_id !== selectedTechId ? techs.find(t => t.id === open.tech_id) : null;
+    const owner   = techs.find(t => t.id === open.tech_id);
+    const starter = open.tech_id !== selectedTechId ? owner : null;
 
     sessionLog = await fetchSessionLines();
 
     document.getElementById('header-right').textContent = `${selectedVanLabel} · ${selectedTechName}`;
     document.getElementById('header-right').style.display = 'block';
-    document.getElementById('ov-label').textContent = sessionType === 'jason_supervised' ? `${selectedTechName}-Supervised Audit` : 'Solo Audit';
-    document.getElementById('ov-name').textContent  = selectedVanLabel;
-    document.getElementById('ov-count').textContent = sessionLog.length
-      ? `${sessionItems.length} items · resuming${starter ? ` ${starter.name}'s audit` : ''}, ${sessionLog.length} already counted`
-      : `${sessionItems.length} items${starter ? ` · joining ${starter.name}'s audit` : ''}`;
-    document.getElementById('ov-restart-btn').style.display = sessionLog.length ? '' : 'none';
+    const ovLabel = document.getElementById('ov-label'), ovCount = document.getElementById('ov-count');
+    if (correctionMode) {
+      const when = new Date(open.completed_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      ovLabel.textContent = 'Already Audited — Corrections Only';
+      ovCount.textContent = `Finished ${when}${owner ? ` by ${owner.name}` : ''} · ${sessionLog.length} counts · tap any to correct it`;
+    } else {
+      ovLabel.textContent = sessionType === 'jason_supervised' ? `${selectedTechName}-Supervised Audit` : 'Solo Audit';
+      ovCount.textContent = sessionLog.length
+        ? `${sessionItems.length} items · resuming${starter ? ` ${starter.name}'s audit` : ''}, ${sessionLog.length} already counted`
+        : `${sessionItems.length} items${starter ? ` · joining ${starter.name}'s audit` : ''}`;
+    }
+    if (isTestVan) ovLabel.textContent = 'Test Run — Never Reaches Reports';
+    document.getElementById('begin-btn').textContent = correctionMode ? 'Review Counts →' : 'Begin →';
+
+    // A finished real audit can't be restarted from the app — that is the
+    // one path that would wipe it. The Test Van can always be reset.
+    const canRestart = isTestVan || !correctionMode;
+    document.querySelectorAll('.restart-link').forEach(el => { el.style.display = canRestart ? '' : 'none'; });
+    const ovRestart = document.getElementById('ov-restart-btn');
+    ovRestart.style.display = canRestart && sessionLog.length ? '' : 'none';
+    ovRestart.textContent = isTestVan ? '↺ Reset Test Van' : '↺ Restart This Audit';
     show('overview-screen');
   } catch (err) {
     showStartError('Could not start the audit. ' + describeError(err));
@@ -723,18 +783,24 @@ function showComplete() {
         <span>${r.name}</span>
         <span class="d-match">${r.actual}</span>
       </div>`).join('');
+  document.getElementById('end-btn').textContent = correctionMode ? 'Done' : 'End Session';
   show('complete-screen');
 }
 
 async function endSession() {
   const btn = document.getElementById('end-btn');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-  try {
-    const { error } = await sb.from('audit_sessions')
-      .update({ completed_at: new Date().toISOString(), status: 'completed' }).eq('id', sessionId);
-    if (error) throw error;
-  } catch (err) {
-    enqueueSessionComplete(sessionId);
+  // Corrections to an already-finished audit leave its status and original
+  // finish time alone — there is nothing to mark.
+  if (!correctionMode) {
+    const status = isTestVan ? 'abandoned' : 'completed';
+    try {
+      const { error } = await sb.from('audit_sessions')
+        .update({ completed_at: new Date().toISOString(), status }).eq('id', sessionId);
+      if (error) throw error;
+    } catch (err) {
+      enqueueSessionComplete(sessionId, status);
+    }
   }
 
   selectedTechId = ''; selectedVanId = ''; sessionId = ''; sessionItems = []; sessionLog = [];
@@ -769,9 +835,13 @@ async function restartAudit() {
   errBox.style.display = 'none';
   let abandoned = false;
   try {
-    const { error } = await sb.from('audit_sessions').update({ status: 'abandoned' }).eq('id', sessionId);
+    // completed_at: null only matters on the Test Van, where it is what
+    // marks a run as finished — clearing it is what makes the reset stick.
+    const { error } = await sb.from('audit_sessions')
+      .update(isTestVan ? { status: 'abandoned', completed_at: null } : { status: 'abandoned' }).eq('id', sessionId);
     if (error) throw error;
     abandoned = true;
+    correctionMode = false;
     const { data: session, error: sessErr } = await createSession();
     if (sessErr) throw sessErr;
     sessionId = session.id;
@@ -835,8 +905,8 @@ function saveRetryQueue(q) {
   document.getElementById('sync-badge').classList.toggle('show', q.length > 0);
   document.getElementById('sync-badge').textContent = q.length ? `${q.length} pending sync…` : '';
 }
-function enqueueSessionComplete(id) {
-  const q = loadRetryQueue(); q.push({ type: 'completeSession', sessionId: id }); saveRetryQueue(q);
+function enqueueSessionComplete(id, status) {
+  const q = loadRetryQueue(); q.push({ type: 'completeSession', sessionId: id, status }); saveRetryQueue(q);
 }
 async function flushRetryQueue() {
   let q = loadRetryQueue();
@@ -846,7 +916,7 @@ async function flushRetryQueue() {
     try {
       if (job.type === 'completeSession') {
         const { error } = await sb.from('audit_sessions')
-          .update({ completed_at: new Date().toISOString(), status: 'completed' }).eq('id', job.sessionId);
+          .update({ completed_at: new Date().toISOString(), status: job.status || 'completed' }).eq('id', job.sessionId);
         if (error) throw error;
       }
     } catch { remaining.push(job); }
