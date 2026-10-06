@@ -113,6 +113,8 @@
     .item-sku { font-size: clamp(18px, 3.2vw, 26px); font-weight: 800; color: #111; letter-spacing: 0.5px; }
 
     .text-link { font-size: 13px; color: #555; text-decoration: underline; cursor: pointer; text-align: center; }
+    .modal-box h3 { font-size: 20px; font-weight: 700; }
+    .modal-box p  { font-size: 15px; color: #555; line-height: 1.5; }
 
     /* Part search — manual "jump to a part" for when the physical walk
        gets out of sequence. */
@@ -137,24 +139,14 @@
     #actual-input::-webkit-search-results-button,
     #actual-input::-webkit-search-results-decoration { display: none; -webkit-appearance: none; }
 
-    .nav-btns { display: flex; gap: 12px; }
-    .nav-btns .btn { font-size: clamp(16px, 2.5vw, 20px); min-height: 62px; }
+    /* Last/Next sit directly under the count field, in normal flow — they
+       never reposition. Kept short so card + count + buttons all clear the
+       on-screen keyboard without anything floating over the page. */
+    .nav-btns { display: flex; gap: 10px; }
+    .nav-btns .btn { font-size: 17px; min-height: 48px; padding: 10px 12px; }
     .nav-btns #last-btn { flex: 1; }
     .nav-btns #submit-btn { flex: 2; }
     .btn-ghost:disabled { opacity: .4; cursor: default; }
-
-    /* Floating bar docked to the top of the on-screen keyboard — see
-       dockKeyboardToolbar(). Fixed positioning + inline `top` set from JS,
-       so it tracks the keyboard instead of the (unhelpful) layout viewport. */
-    .kb-toolbar {
-      display: none; position: fixed; left: 0; right: 0; z-index: 50;
-      gap: 10px; padding: 10px 16px; background: #F5F0E8;
-      border-top: 1px solid #ddd; box-shadow: 0 -4px 10px rgba(0,0,0,.08);
-    }
-    .kb-toolbar.show { display: flex; }
-    .kb-toolbar .btn { font-size: 16px; min-height: 46px; padding: 10px; }
-    .kb-toolbar #kb-last-btn { flex: 1; }
-    .kb-toolbar #kb-submit-btn { flex: 2; }
 
     #complete-screen { padding-top: 32px; }
     .done-badge { background: #7CB518; color: white; border-radius: 14px; padding: 28px 24px; text-align: center; }
@@ -224,6 +216,7 @@
     Enter the actual count you find in each bin.
   </div>
   <button class="btn btn-green" onclick="beginAudit()">Begin →</button>
+  <button class="btn btn-amber" id="ov-restart-btn" style="display:none;" onclick="openRestartConfirm()">↺ Restart This Audit</button>
   <button class="btn btn-ghost" onclick="show('start-screen')">← Change Van / Name</button>
 </div>
 
@@ -250,28 +243,21 @@
       <input type="search" id="actual-input" inputmode="numeric" min="0" placeholder="Count"
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
 
-      <div id="submit-error" class="error-box" style="display:none;"></div>
-
       <div class="nav-btns">
         <button class="btn btn-ghost" id="last-btn">◀ Last</button>
         <button class="btn btn-green" id="submit-btn">Next →</button>
       </div>
+
+      <!-- Below the buttons on purpose: an error appearing must not push
+           Last/Next out from under the tech's thumb. -->
+      <div id="submit-error" class="error-box" style="display:none;"></div>
     </div>
 
     <div id="submitted-toggle" onclick="toggleSubmittedList()">▸ Submitted (<span id="submitted-count">0</span>) — tap any to edit</div>
     <div id="submitted-list"></div>
 
     <div class="text-link" onclick="openPartSearch()">🔍 Jump to a part</div>
-  </div>
-
-  <!-- Docked to the top edge of the on-screen keyboard via visualViewport
-       (see dockKeyboardToolbar) so Last/Next stay reachable without
-       scrolling the page behind the keyboard. Hidden until the qty field
-       is actually focused; the in-page nav-btns row is the fallback on
-       browsers without visualViewport support. -->
-  <div class="kb-toolbar" id="kb-toolbar">
-    <button class="btn btn-ghost" id="kb-last-btn">◀ Last</button>
-    <button class="btn btn-green" id="kb-submit-btn">Next →</button>
+    <div class="text-link" onclick="openRestartConfirm()">↺ Restart this audit</div>
   </div>
 </div>
 
@@ -283,6 +269,7 @@
   </div>
   <div id="disc-list"></div>
   <button class="btn btn-green" id="end-btn" onclick="endSession()">End Session</button>
+  <div class="text-link" onclick="openRestartConfirm()">↺ Restart this audit</div>
 </div>
 
 <!-- Part search — manual "jump to a part", for when the physical walk
@@ -292,6 +279,18 @@
     <input type="text" id="part-search-input" placeholder="Search part name or #…">
     <div id="part-search-results" class="search-list"></div>
     <button class="btn btn-ghost" onclick="closePartSearch()">Cancel</button>
+  </div>
+</div>
+
+<!-- Restart — sets the current audit aside (status 'abandoned', so it stays
+     out of every report) and opens a blank one for the same van. -->
+<div class="modal-overlay" id="restart-modal">
+  <div class="modal-box">
+    <h3>Restart this audit?</h3>
+    <p id="restart-msg"></p>
+    <div id="restart-error" class="error-box" style="display:none;"></div>
+    <button class="btn btn-amber" id="restart-confirm-btn" onclick="restartAudit()">Yes, clear and start over</button>
+    <button class="btn btn-ghost" onclick="closeRestartConfirm()">Cancel</button>
   </div>
 </div>
 
@@ -346,11 +345,6 @@ let gpmUseCauseCodeId = null;   // looked up once at boot — see submitItem()'s
 
   bindTap(document.getElementById('last-btn'), goLast);
   bindTap(document.getElementById('submit-btn'), submitItem);
-  bindTap(document.getElementById('kb-last-btn'), goLast);
-  bindTap(document.getElementById('kb-submit-btn'), submitItem);
-
-  mirrorSubmitButton();
-  dockKeyboardToolbar();
 })();
 
 // Last/Next must not blur #actual-input on tap (that closes the keyboard),
@@ -399,52 +393,21 @@ function bindTap(el, handler) {
   });
 }
 
-// The floating kb-toolbar's Next button always mirrors the real #submit-btn
-// (label, disabled state, spinner) rather than duplicating every place that
-// changes it — one observer instead of touching submitItem/renderItem/etc.
-function mirrorSubmitButton() {
-  const src = document.getElementById('submit-btn');
-  const dst = document.getElementById('kb-submit-btn');
-  const sync = () => { dst.innerHTML = src.innerHTML; dst.disabled = src.disabled; };
-  sync();
-  new MutationObserver(sync).observe(src, {
-    childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['disabled'],
-  });
-}
-
-// Docks Last/Next to the top edge of the on-screen keyboard using
-// visualViewport, so they're reachable without scrolling the page behind
-// the keyboard. Falls back to the in-page nav-btns row (always visible)
-// on browsers without visualViewport support.
-function dockKeyboardToolbar() {
-  if (!window.visualViewport) return;
-  const input = document.getElementById('actual-input');
-  const bar = document.getElementById('kb-toolbar');
-  const inlineNav = document.querySelector('#item-screen .nav-btns');
-
-  function position() {
-    const vv = window.visualViewport;
-    const keyboardHeight = window.innerHeight - vv.height - vv.offsetTop;
-    const keyboardOpen = document.activeElement === input && keyboardHeight > 100;
-    if (keyboardOpen) {
-      bar.style.bottom = keyboardHeight + 'px';
-      bar.classList.add('show');
-      inlineNav.style.visibility = 'hidden';
-    } else {
-      bar.classList.remove('show');
-      inlineNav.style.visibility = '';
-    }
-  }
-  window.visualViewport.addEventListener('resize', position);
-  window.visualViewport.addEventListener('scroll', position);
-  input.addEventListener('focus', () => setTimeout(position, 50));
-  input.addEventListener('blur', () => { bar.classList.remove('show'); inlineNav.style.visibility = ''; });
-}
-
 function checkStartReady() {
   const techSel = document.getElementById('tech-select');
   const vanSel  = document.getElementById('van-select');
   document.getElementById('start-btn').disabled = !(techSel.value && vanSel.value);
+}
+
+// What actually went wrong, in words. A generic "check connection" on every
+// failure hid a database rule rejecting techs' counts for two weeks
+// (2026-10-06) — only a real network failure gets the connection message.
+function describeError(err) {
+  const msg = (err && err.message) || String(err);
+  if (!navigator.onLine || /failed to fetch|load failed|network/i.test(msg)) {
+    return 'No connection — check signal and try again.';
+  }
+  return `The database rejected this (${(err && err.code) || 'error'}): ${msg.replace(/[.\s]+$/, '')}. Retrying won't fix it — tell Matt.`;
 }
 
 function showStartError(msg) {
@@ -453,10 +416,47 @@ function showStartError(msg) {
 }
 
 // ── Load session: latest baseline + every part expected on this van ──────────
-// Resumes an already-started session for this tech+van rather than creating
-// a duplicate — a reload, a backgrounded tab, or hitting Back and reloading
-// used to silently fork a new session every time, splitting real counts
-// across multiple orphaned rows (see project notes, 2026-08-21).
+// One audit per van per baseline. Resumes whatever is already in progress on
+// this van — whoever started it — rather than creating a second one: a
+// reload, a backgrounded tab, or a second person picking the same van under
+// their own name used to fork a parallel session, splitting real counts
+// across rows that each looked incomplete (see project notes, 2026-08-21
+// and 2026-10-06).
+async function findOpenSession() {
+  const { data, error } = await sb.from('audit_sessions')
+    .select('id, tech_id, session_type').eq('van_id', selectedVanId)
+    .eq('par_sync_id', parSyncId).eq('status', 'in_progress')
+    .order('started_at', { ascending: false }).limit(1);
+  if (error) throw error;
+  return data[0] || null;
+}
+
+async function createSession() {
+  return sb.from('audit_sessions')
+    .insert({ van_id: selectedVanId, tech_id: selectedTechId, session_type: sessionType, par_sync_id: parSyncId })
+    .select().single();
+}
+
+async function fetchSessionLines() {
+  const { data, error } = await sb.from('audit_lines')
+    .select('id, part_id, actual_qty, delta, cause_code_id, wo_property, wo_unit, wo_number, borrowed_to, expected_order_date')
+    .eq('session_id', sessionId);
+  if (error) throw error;
+  return data.map(l => {
+    const item = sessionItems.find(i => i.partId === l.part_id);
+    return {
+      partId: l.part_id, name: item ? item.name : '', actual: l.actual_qty,
+      expectedQty: item ? item.expectedQty : l.actual_qty - l.delta,
+      delta: l.delta, causeCodeId: l.cause_code_id,
+      reasonPayload: {
+        cause_code_id: l.cause_code_id, wo_property: l.wo_property, wo_unit: l.wo_unit,
+        wo_number: l.wo_number, borrowed_to: l.borrowed_to, expected_order_date: l.expected_order_date,
+      },
+      lineId: l.id,
+    };
+  });
+}
+
 async function loadSession() {
   const techSel = document.getElementById('tech-select');
   const vanSel  = document.getElementById('van-select');
@@ -496,57 +496,43 @@ async function loadSession() {
         return a.binNumber - b.binNumber || a.name.localeCompare(b.name);
       });
 
-    // A dangling in-progress session for this tech+van from an OLDER
-    // baseline is stale, not resumable — its expected quantities no longer
-    // apply. Close it out rather than leave it as permanent dead weight.
+    // A dangling in-progress session on this van from an OLDER baseline is
+    // stale, not resumable — its expected quantities no longer apply. Close
+    // it out rather than leave it as permanent dead weight.
     await sb.from('audit_sessions').update({ status: 'abandoned' })
-      .eq('van_id', selectedVanId).eq('tech_id', selectedTechId)
-      .eq('status', 'in_progress').neq('par_sync_id', parSyncId);
+      .eq('van_id', selectedVanId).eq('status', 'in_progress').neq('par_sync_id', parSyncId);
 
-    const { data: openSessions, error: openErr } = await sb.from('audit_sessions')
-      .select('id').eq('van_id', selectedVanId).eq('tech_id', selectedTechId)
-      .eq('par_sync_id', parSyncId).eq('status', 'in_progress')
-      .order('started_at', { ascending: false }).limit(1);
-    if (openErr) throw openErr;
-
-    sessionLog = [];
-    if (openSessions.length) {
-      sessionId = openSessions[0].id;
-      const { data: existingLines, error: linesErr } = await sb.from('audit_lines')
-        .select('id, part_id, actual_qty, delta, cause_code_id, wo_property, wo_unit, wo_number, borrowed_to, expected_order_date')
-        .eq('session_id', sessionId);
-      if (linesErr) throw linesErr;
-      sessionLog = existingLines.map(l => {
-        const item = sessionItems.find(i => i.partId === l.part_id);
-        return {
-          partId: l.part_id, name: item ? item.name : '', actual: l.actual_qty,
-          expectedQty: item ? item.expectedQty : l.actual_qty - l.delta,
-          delta: l.delta, causeCodeId: l.cause_code_id,
-          reasonPayload: {
-            cause_code_id: l.cause_code_id, wo_property: l.wo_property, wo_unit: l.wo_unit,
-            wo_number: l.wo_number, borrowed_to: l.borrowed_to, expected_order_date: l.expected_order_date,
-          },
-          lineId: l.id,
-        };
-      });
-    } else {
-      const { data: session, error: sessErr } = await sb.from('audit_sessions')
-        .insert({ van_id: selectedVanId, tech_id: selectedTechId, session_type: sessionType, par_sync_id: parSyncId })
-        .select().single();
-      if (sessErr) throw sessErr;
-      sessionId = session.id;
+    let open = await findOpenSession();
+    if (!open) {
+      const { data: session, error: sessErr } = await createSession();
+      // 23505 = another phone opened this van a moment ago (one-open-
+      // session-per-van index) — join theirs instead of failing.
+      if (sessErr && sessErr.code === '23505') open = await findOpenSession();
+      else if (sessErr) throw sessErr;
+      else open = session;
+      if (!open) throw sessErr;
     }
+    sessionId = open.id;
+
+    // A supervisor joining a tech's solo audit makes it a supervised one.
+    if (sessionType === 'jason_supervised' && open.session_type !== 'jason_supervised') {
+      await sb.from('audit_sessions').update({ session_type: 'jason_supervised' }).eq('id', sessionId);
+    }
+    const starter = open.tech_id !== selectedTechId ? techs.find(t => t.id === open.tech_id) : null;
+
+    sessionLog = await fetchSessionLines();
 
     document.getElementById('header-right').textContent = `${selectedVanLabel} · ${selectedTechName}`;
     document.getElementById('header-right').style.display = 'block';
     document.getElementById('ov-label').textContent = sessionType === 'jason_supervised' ? `${selectedTechName}-Supervised Audit` : 'Solo Audit';
     document.getElementById('ov-name').textContent  = selectedVanLabel;
     document.getElementById('ov-count').textContent = sessionLog.length
-      ? `${sessionItems.length} items · resuming, ${sessionLog.length} already counted`
-      : `${sessionItems.length} items`;
+      ? `${sessionItems.length} items · resuming${starter ? ` ${starter.name}'s audit` : ''}, ${sessionLog.length} already counted`
+      : `${sessionItems.length} items${starter ? ` · joining ${starter.name}'s audit` : ''}`;
+    document.getElementById('ov-restart-btn').style.display = sessionLog.length ? '' : 'none';
     show('overview-screen');
   } catch (err) {
-    showStartError('Failed to start session — check connection and try again.');
+    showStartError('Could not start the audit. ' + describeError(err));
   } finally {
     resetStartBtn();
   }
@@ -591,7 +577,6 @@ function renderItem() {
 function updateNavButtons() {
   const atStart = currentIdx === 0;
   document.getElementById('last-btn').disabled = atStart;
-  document.getElementById('kb-last-btn').disabled = atStart;
 }
 function goLast() { if (currentIdx > 0) { currentIdx--; renderItem(); } }
 
@@ -651,35 +636,51 @@ async function submitItem() {
 
   try {
     if (existing && existing.lineId) {
-      await sb.from('audit_line_edits').insert({
-        audit_line_id: existing.lineId,
-        previous_actual_qty: existing.actual,
-        previous_cause_code_id: existing.causeCodeId || null,
-        new_actual_qty: actual,
-        new_cause_code_id: reasonPayload.cause_code_id,
-        edited_by: selectedTechId,
-      });
-      const { error } = await sb.from('audit_lines').update({
-        actual_qty: actual, ...reasonPayload,
-      }).eq('id', existing.lineId);
-      if (error) throw error;
-      Object.assign(existing, { actual, delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id, reasonPayload });
+      await saveEdit(existing, actual, reasonPayload, item);
     } else {
       const { data, error } = await sb.from('audit_lines').insert({
         session_id: sessionId, part_id: item.partId, expected_qty: item.expectedQty,
         actual_qty: actual, ...reasonPayload,
       }).select().single();
-      if (error) throw error;
-      sessionLog.push({ partId: item.partId, name: item.name, actual, expectedQty: item.expectedQty,
-        delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id, reasonPayload, lineId: data.id });
+      if (error && error.code === '23505') {
+        // Someone else on this same audit already counted this part (one
+        // line per part per session). Pull their lines in and record this
+        // count as a correction to theirs, not a second row.
+        sessionLog = await fetchSessionLines();
+        const theirs = sessionLog.find(r => r.partId === item.partId);
+        if (!theirs) throw error;
+        await saveEdit(theirs, actual, reasonPayload, item);
+      } else if (error) {
+        throw error;
+      } else {
+        sessionLog.push({ partId: item.partId, name: item.name, actual, expectedQty: item.expectedQty,
+          delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id, reasonPayload, lineId: data.id });
+      }
     }
   } catch (err) {
     btn.disabled = false; btn.textContent = originalLabel;
-    showSubmitError('Submit failed — check connection and try again. Nothing was skipped.');
+    showSubmitError('Not saved — nothing was skipped. ' + describeError(err));
     return;
   }
 
   advanceAfterSubmit();
+}
+
+// A correction: log the before/after in audit_line_edits, then update the line.
+async function saveEdit(existing, actual, reasonPayload, item) {
+  await sb.from('audit_line_edits').insert({
+    audit_line_id: existing.lineId,
+    previous_actual_qty: existing.actual,
+    previous_cause_code_id: existing.causeCodeId || null,
+    new_actual_qty: actual,
+    new_cause_code_id: reasonPayload.cause_code_id,
+    edited_by: selectedTechId,
+  });
+  const { error } = await sb.from('audit_lines').update({
+    actual_qty: actual, ...reasonPayload,
+  }).eq('id', existing.lineId);
+  if (error) throw error;
+  Object.assign(existing, { actual, delta: actual - item.expectedQty, causeCodeId: reasonPayload.cause_code_id, reasonPayload });
 }
 
 function advanceAfterSubmit() {
@@ -743,6 +744,57 @@ async function endSession() {
   document.getElementById('start-btn').disabled = true;
   btn.disabled = false; btn.textContent = 'End Session';
   show('start-screen');
+}
+
+// ── Restart — clear this van's audit and start it over ───────────────────────
+// The app can never delete a row (see policies.sql), so a restart sets the
+// current session aside as 'abandoned' — both reports only read 'completed'
+// sessions — and opens a fresh one for the same van and baseline.
+function openRestartConfirm() {
+  document.getElementById('actual-input').blur();
+  const n = sessionLog.length;
+  document.getElementById('restart-msg').textContent =
+    `${n} count${n === 1 ? '' : 's'} entered so far on ${selectedVanLabel} will be cleared and the audit starts again at the first bin. ` +
+    `This applies to everyone counting this van.`;
+  document.getElementById('restart-error').style.display = 'none';
+  document.getElementById('restart-modal').classList.add('open');
+}
+function closeRestartConfirm() {
+  document.getElementById('restart-modal').classList.remove('open');
+}
+async function restartAudit() {
+  const btn = document.getElementById('restart-confirm-btn');
+  const errBox = document.getElementById('restart-error');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  errBox.style.display = 'none';
+  let abandoned = false;
+  try {
+    const { error } = await sb.from('audit_sessions').update({ status: 'abandoned' }).eq('id', sessionId);
+    if (error) throw error;
+    abandoned = true;
+    const { data: session, error: sessErr } = await createSession();
+    if (sessErr) throw sessErr;
+    sessionId = session.id;
+    sessionLog = [];
+    currentIdx = 0;
+    closeRestartConfirm();
+    show('item-screen');
+    renderItem();
+  } catch (err) {
+    if (abandoned) {
+      // Old audit is already set aside but the new one didn't open — back
+      // to the start screen, where Load creates it.
+      closeRestartConfirm();
+      sessionId = ''; sessionLog = [];
+      show('start-screen');
+      showStartError('Audit cleared, but the new one did not open. ' + describeError(err));
+    } else {
+      errBox.textContent = 'Not restarted. ' + describeError(err);
+      errBox.style.display = 'block';
+    }
+  } finally {
+    btn.disabled = false; btn.textContent = 'Yes, clear and start over';
+  }
 }
 
 // ── Part search — manual "jump to a part" for when the physical walk gets
