@@ -111,6 +111,7 @@
     }
     .item-card h3 { font-size: clamp(18px, 3vw, 24px); font-weight: 700; line-height: 1.25; color: #1a1a1a; }
     .item-sku { font-size: clamp(18px, 3.2vw, 26px); font-weight: 800; color: #111; letter-spacing: 0.5px; }
+    .item-exp { font-size: 11px; font-weight: 500; color: #999; letter-spacing: 0; margin-left: 8px; }
 
     .text-link { font-size: 13px; color: #555; text-decoration: underline; cursor: pointer; text-align: center; }
     .modal-box h3 { font-size: 20px; font-weight: 700; }
@@ -623,7 +624,14 @@ function renderItem() {
   document.getElementById('prog-lbl').textContent  = `Item ${currentIdx + 1} of ${sessionItems.length}`;
   document.getElementById('item-bin').textContent  = item.binNumber != null ? `BIN ${item.binNumber}` : 'BIN —';
   document.getElementById('item-name').textContent = item.name;
-  document.getElementById('item-pn').textContent   = `# ${item.partNumber}`;
+  const pnEl = document.getElementById('item-pn');
+  pnEl.textContent = `# ${item.partNumber}`;
+  if (canSeeExpected()) {
+    const exp = document.createElement('span');
+    exp.className = 'item-exp';
+    exp.textContent = `exp ${item.expectedQty}`;
+    pnEl.appendChild(exp);
+  }
   document.getElementById('actual-input').value    = existing ? existing.actual : '';
   document.getElementById('submit-btn').textContent = existing ? 'Save Edit →' : 'Next →';
   document.getElementById('submit-btn').disabled = false;
@@ -632,6 +640,12 @@ function renderItem() {
   updateNavButtons();
   renderSubmittedList();
   setTimeout(() => document.getElementById('actual-input').focus(), 150);
+}
+
+// Techs count blind. Matt and supervisors (Jason) get the expected quantity
+// as a small hint next to the part number.
+function canSeeExpected() {
+  return selectedTechName === 'Matt' || sessionType === 'jason_supervised';
 }
 
 function updateNavButtons() {
@@ -773,7 +787,7 @@ function toggleSubmittedList() {
 }
 
 // ── Session complete ──────────────────────────────────────────────────────────
-// Blind count: the expected quantity is never shown to the auditor, and that
+// Blind count: the expected quantity is never shown to a tech, and that
 // includes anything it could be worked back from (a +/- delta, a red
 // "mismatch" marker, a discrepancy total). Counts only, here and everywhere.
 function showComplete() {
